@@ -6,7 +6,7 @@ import { PitchLane, Overview } from './lane.js';
 import { SalienceAnalyzer, trackMelody, melodyAt, melodyDuration, estimateTonic, findPhrases, F_REF } from './melody.js';
 import { analyzeTake, transcribe, fitToRange, swaraBiasText, describeSwaraBias } from './coach.js';
 import { settings, saveSettings, songs, getSong, upsertSong, removeSong, lastSong, idbGet, idbPut, packMelody, unpackMelody, logActivity } from './store.js';
-import { westernName, hzToMidi, midiToHz, kattaiName, kaliSafedName, percentile, saHzFrom } from './music.js';
+import { westernName, hzToMidi, midiToHz, kattaiName, kaliSafedName, percentile, saHzFrom, isIndian, term } from './music.js';
 import { h, toast, ensureMic, tipList, fmtTime } from './ui.js';
 import { LiveReadout, stat } from './practice.js';
 
@@ -154,6 +154,17 @@ async function analyzeBlob(blob, onProgress) {
 }
 
 const cAbove55 = (hz) => 1200 * Math.log2(hz / F_REF);
+
+// Plain reading of a transcription: the held notes only, no ornament symbols.
+function simpleNotes(toks) {
+  const out = [];
+  for (const tk of toks) {
+    if (tk.dur < 0.15) continue;
+    const parts = tk.text.replace(/\([^)]*\)/g, '').replace(/[*^%]/g, '').split('~');
+    for (const n of [parts[0], parts[parts.length - 1]]) if (n && out[out.length - 1] !== n) out.push(n);
+  }
+  return out;
+}
 
 // ---------------------------------------------------------------------------
 export class SongStudio {
@@ -359,10 +370,12 @@ export class SongStudio {
     this.lane.message = this.mel ? '' : 'No melody guide yet. Use "Build melody guide" above.';
     this.labelTokens = [];
     if (this.mel) for (const p of this.phrases) {
-      const toks = transcribe(this.refAt, p.start, p.end, { tuning: settings.tuning, notation: settings.notation });
-      p.sargam = toks.map((x) => x.text).join(' ');
+      const toks = transcribe(this.refAt, p.start, p.end, { tuning: settings.tuning, notation: settings.notation, saHz: this.practiceSa });
+      const west = !isIndian(settings);
+      const bare = (x) => (west ? x.replace(/-?\d+$/, '') : x); // "G3" -> "G" in line text
+      p.sargam = settings.showOrnaments ? toks.map((x) => x.text.replace(/[A-G]#?-?\d+/g, bare)).join(' ') : simpleNotes(toks).map(bare).join(' ');
       let lastT = -1;
-      for (const tk of toks) if (tk.t - lastT > 0.14) { this.labelTokens.push({ t: tk.t, c: (tk.idx + 12 * tk.oct) * 100, text: tk.text.replace(/^\([^)]*\)/, '').replace(/~.*/, '') }); lastT = tk.t; }
+      for (const tk of toks) if (tk.dur >= 0.12 && tk.t - lastT > 0.2) { this.labelTokens.push({ t: tk.t, c: (tk.idx + 12 * tk.oct) * 100, text: bare(tk.text.replace(/^\([^)]*\)/, '').replace(/~.*/, '').replace(/[*^%]/g, '')) }); lastT = tk.t; }
     }
     this.lane.labels = settings.showLabels === false ? [] : this.labelTokens;
     if (tanpura.on) tanpura.start(this.practiceSa, settings.tanpuraFirst);
@@ -396,11 +409,11 @@ export class SongStudio {
       const sa = this.songSa, m = hzToMidi(sa);
       const cands = (s[this.source + 'SaCands'] || []).slice(1);
       i.append(h('div', { class: 'keyrow' },
-        h('div', {}, h('div', { class: 'muted small' }, 'Song Sa (tonic)'), h('div', { class: 'keyname' }, westernName(m), h('small', {}, ` ${(m - Math.round(m)) * 100 > 0 ? '+' : ''}${Math.round((m - Math.round(m)) * 100)}¢`)), h('div', { class: 'muted small' }, `${kattaiName(Math.round(m) % 12)} · ${kaliSafedName(Math.round(m) % 12)}`)),
+        h('div', {}, h('div', { class: 'muted small' }, isIndian(settings) ? 'Song Sa (tonic)' : 'Song key note (tonic)'), h('div', { class: 'keyname' }, westernName(m), h('small', {}, ` ${(m - Math.round(m)) * 100 > 0 ? '+' : ''}${Math.round((m - Math.round(m)) * 100)}¢`)), isIndian(settings) ? h('div', { class: 'muted small' }, `${kattaiName(Math.round(m) % 12)} · ${kaliSafedName(Math.round(m) % 12)}`) : null),
         h('div', { class: 'col' },
           h('div', { class: 'row' }, h('button', { class: 'btn small', onclick: () => this.nudgeSa(-100) }, '−1 st'), h('button', { class: 'btn small', onclick: () => this.nudgeSa(100) }, '+1 st'), h('button', { class: 'btn small', onclick: () => this.nudgeSa(-10) }, '−10¢'), h('button', { class: 'btn small', onclick: () => this.nudgeSa(10) }, '+10¢')),
           cands.length ? h('div', { class: 'muted small' }, 'Other guesses: ', ...cands.map((hz) => h('a', { href: '#', onclick: (e) => { e.preventDefault(); this.setSa(hz); } }, westernName(hzToMidi(hz)) + ' '))) : null,
-          h('div', { class: 'muted small' }, 'Check: the Sa line should sit where phrases come to rest.'),
+          h('div', { class: 'muted small' }, isIndian(settings) ? 'Check: the Sa line should sit where phrases come to rest.' : 'Check: the bold key-note line should be where phrases come to rest. Minor-key songs often rest there too.'),
         ),
       ));
       // range fit
@@ -451,6 +464,7 @@ export class SongStudio {
   renderPhrases() {
     const b = this.phraseBox; b.innerHTML = '';
     if (!this.song || !this.phrases || !this.phrases.length) { b.append(h('p', { class: 'muted' }, this.mel ? 'No lines found.' : 'Lines appear once the melody guide is built.')); return; }
+    b.append(h('p', { class: 'muted small' }, 'Each row is one phrase (line) of the song. The letters are the notes the singer sings, approximately. Click a row to loop it, then sing along.'));
     const list = h('ol', { class: 'phrase-list' });
     this.phrases.forEach((p, i) => {
       const best = this.song.best[i];
@@ -460,7 +474,11 @@ export class SongStudio {
         h('span', { class: 'pbest ' + (best >= 75 ? 'good' : best >= 50 ? 'ok' : best != null ? 'bad' : '') }, best != null ? String(best) : '–'));
       list.append(li);
     });
-    b.append(list, h('p', { class: 'muted small' }, 'Auto-transcribed sargam (approximate). ~ = meend, * = gamak or oscillation, (x) = kan swar. Click a line to loop it.'));
+    const orn = h('input', { type: 'checkbox', checked: !!settings.showOrnaments, onchange: (e) => { saveSettings({ showOrnaments: e.target.checked }); this.refreshKey(); this.renderPhrases(); } });
+    b.append(list, h('label', { class: 'ctl small' }, orn, ' Show ornaments'),
+      settings.showOrnaments ? h('p', { class: 'muted small' }, isIndian(settings)
+        ? '~ = meend (slide), * = gamak (shake), (x) = kan swar (grace note). '
+        : '~ = slide, * = shake/trill, (x) = grace note. ', h('a', { href: '#learn' }, 'What are these?')) : null);
   }
   loopPhrase(i) {
     const p = this.song && this.phrases && this.phrases[i]; if (!p) return;
@@ -633,7 +651,7 @@ export class SongStudio {
       res.wobble != null ? stat('Wobble', '±' + Math.round(res.wobble) + '¢') : null,
       res.ornRatio != null ? stat('Ornaments', Math.round(res.ornRatio * 100) + '%') : null)));
     const bias = swaraBiasText(res.perSwara);
-    if (bias.length) f.append(h('p', { class: 'small' }, h('strong', {}, 'Microtone check: '), describeSwaraBias(bias.slice(0, 4))));
+    if (bias.length) f.append(h('p', { class: 'small' }, h('strong', {}, 'Note-by-note tuning: '), describeSwaraBias(bias.slice(0, 4))));
     f.append(tipList(res.tips));
     if (blob) {
       const url = URL.createObjectURL(blob);

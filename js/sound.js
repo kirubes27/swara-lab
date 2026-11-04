@@ -57,13 +57,45 @@ export function renderTanpuraCycle(sr, saHz, first = 'P') {
   return { L, R };
 }
 
+// Soft "pad" drone (root + fifth + octave), for songs outside Indian music.
+// Every partial completes a whole number of cycles in the loop, so it loops seamlessly.
+export function renderPadCycle(sr, saHz) {
+  const L = 8, N = Math.round(L * sr);
+  const out = [new Float32Array(N), new Float32Array(N)];
+  const voices = [[saHz / 2, 0.8], [saHz, 0.6], [saHz * 1.5, 0.35], [saHz * 2, 0.22]];
+  const harm = [1, 0.28, 0.1, 0.05];
+  let k = 0;
+  for (const [f0, a0] of voices) for (const det of [-0.12, 0.12]) {
+    k++;
+    for (let h = 1; h <= harm.length; h++) {
+      const f = Math.round(f0 * h * (1 + det / 100) * L) / L;
+      if (f > 5000) continue;
+      const w = (2 * Math.PI * f) / sr, ph = k * 1.7 + h;
+      const lfoRate = (1 + ((k + h) % 3)) / L; // 1-3 slow swells per loop
+      const a = a0 * harm[h - 1];
+      const ch = out[k % 2];
+      for (let i = 0; i < N; i++) {
+        const lfo = 0.75 + 0.25 * Math.sin(2 * Math.PI * lfoRate * (i / sr) + k);
+        ch[i] += a * lfo * Math.sin(w * i + ph);
+      }
+    }
+  }
+  let peak = 0;
+  for (const ch of out) for (let i = 0; i < N; i++) peak = Math.max(peak, Math.abs(ch[i]));
+  for (const ch of out) for (let i = 0; i < N; i++) ch[i] *= 0.7 / (peak || 1);
+  return { L: out[0], R: out[1] };
+}
+
 export class Tanpura {
   constructor() { this.src = null; this.gain = null; this.on = false; this.vol = 0.35; this.key = ''; this.cache = new Map(); }
+  // kindFn() -> 'tanpura' | 'pad' (set by the app from settings)
+  kind() { return this.kindFn ? this.kindFn() : 'tanpura'; }
   buffer(saHz, first) {
     const c = audioCtx();
-    const key = saHz.toFixed(2) + first + c.sampleRate;
+    const kind = this.kind();
+    const key = kind + saHz.toFixed(2) + first + c.sampleRate;
     if (this.cache.has(key)) return this.cache.get(key);
-    const { L, R } = renderTanpuraCycle(c.sampleRate, saHz, first);
+    const { L, R } = kind === 'pad' ? renderPadCycle(c.sampleRate, saHz) : renderTanpuraCycle(c.sampleRate, saHz, first);
     const b = c.createBuffer(2, L.length, c.sampleRate);
     b.copyToChannel(L, 0); b.copyToChannel(R, 1);
     if (this.cache.size > 6) this.cache.clear();
@@ -72,7 +104,7 @@ export class Tanpura {
   }
   start(saHz, first = 'P') {
     const c = audioCtx();
-    const key = saHz.toFixed(2) + first;
+    const key = this.kind() + saHz.toFixed(2) + first;
     if (this.on && key === this.key) return;
     const old = this.src, oldG = this.gain;
     const g = c.createGain(); g.gain.value = 0;

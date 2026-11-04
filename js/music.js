@@ -104,3 +104,61 @@ export function percentile(arr, p) {
   return s[i];
 }
 export function wrapCents(d) { return ((((d + 600) % 1200) + 1200) % 1200) - 600; }
+
+// ---------------------------------------------------------------------------
+// Style: 'general' (any song; note names, scale degrees) or Indian (sargam).
+// settings.notation: 'western' | 'hindustani' | 'carnatic'
+export const isIndian = (s) => s.notation === 'hindustani' || s.notation === 'carnatic';
+
+// Scales offered in drills. Indian names shown in Indian style when they exist.
+export const SCALES = {
+  major:      { name: 'Major', indian: 'Bilawal', carnatic: 'Shankarabharanam', notes: [0, 2, 4, 5, 7, 9, 11] },
+  minor:      { name: 'Natural minor', indian: 'Asavari', carnatic: 'Natabhairavi', notes: [0, 2, 3, 5, 7, 8, 10] },
+  majPenta:   { name: 'Major pentatonic', indian: 'Bhoopali', carnatic: 'Mohanam', notes: [0, 2, 4, 7, 9] },
+  minPenta:   { name: 'Minor pentatonic', indian: 'Dhani', carnatic: 'Shuddha Dhanyasi', notes: [0, 3, 5, 7, 10] },
+  blues:      { name: 'Blues', indian: null, carnatic: null, notes: [0, 3, 5, 6, 7, 10] },
+  dorian:     { name: 'Dorian', indian: 'Kafi', carnatic: 'Kharaharapriya', notes: [0, 2, 3, 5, 7, 9, 10] },
+  mixolydian: { name: 'Mixolydian', indian: 'Khamaj', carnatic: 'Harikambhoji', notes: [0, 2, 4, 5, 7, 9, 10] },
+  lydian:     { name: 'Lydian', indian: 'Kalyan', carnatic: 'Mechakalyani', notes: [0, 2, 4, 6, 7, 9, 11] },
+  phrygian:   { name: 'Phrygian', indian: 'Bhairavi', carnatic: 'Hanumatodi', notes: [0, 1, 3, 5, 7, 8, 10] },
+  harmMinor:  { name: 'Harmonic minor', indian: 'Kirwani', carnatic: 'Keeravani', notes: [0, 2, 3, 5, 7, 8, 11] },
+  bhairav:    { name: 'Double harmonic', indian: 'Bhairav', carnatic: 'Mayamalavagowla', notes: [0, 1, 4, 5, 7, 8, 11] },
+  poorvi:     { name: 'Poorvi', indian: 'Poorvi', carnatic: 'Kamavardhani', notes: [0, 1, 4, 6, 7, 8, 11], indianOnly: true },
+  marwa:      { name: 'Marwa', indian: 'Marwa', carnatic: 'Gamanashrama', notes: [0, 1, 4, 6, 7, 9, 11], indianOnly: true },
+  todi:       { name: 'Todi', indian: 'Todi', carnatic: 'Shubhapantuvarali', notes: [0, 1, 3, 6, 7, 8, 11], indianOnly: true },
+};
+export function scaleLabel(key, s) {
+  const sc = SCALES[key];
+  if (!sc) return key;
+  if (!isIndian(s)) return sc.name + (sc.indian && !sc.indianOnly ? '' : '');
+  const ind = s.notation === 'carnatic' ? sc.carnatic : sc.indian;
+  return ind ? `${ind} (${sc.name})` : sc.name;
+}
+export function scaleList(s) { return Object.keys(SCALES).filter((k) => isIndian(s) || !SCALES[k].indianOnly); }
+
+// Scale-degree names relative to the tonic (for the general style).
+export const DEGREES = ['1', '♭2', '2', '♭3', '3', '4', '♯4', '5', '♭6', '6', '♭7', '7'];
+export const DEGREE_LONG = ['1 (tonic)', '♭2', '2', '♭3 (minor 3rd)', '3 (major 3rd)', '4', '♯4', '5 (fifth)', '♭6', '6', '♭7', '7'];
+
+// A note given as (semitone idx above tonic, octave) -> display text in the current style.
+export function noteText(idx, oct, saHz, s) {
+  if (isIndian(s)) return swaraLabel(idx, oct, s.notation);
+  return westernName(Math.round(hzToMidi(saHz)) + idx + 12 * oct);
+}
+export function degreeText(idx, s) { return isIndian(s) ? SWARA_LONG[idx] : DEGREE_LONG[idx]; }
+
+// Vocabulary that changes with style.
+const VOCAB = {
+  tonic:     ['Key', 'Sa'],
+  tonicLong: ['home note (tonic)', 'Sa (tonic)'],
+  drone:     ['Drone', 'Tanpura'],
+  scale:     ['Scale', 'Thaat / raga scale'],
+  slide:     ['slide', 'meend'],
+  grace:     ['grace note', 'kan swar'],
+  shake:     ['shake / vibrato', 'gamak'],
+  ornaments: ['runs, slides and ornaments', 'gamakas, kan swaras and murkis'],
+  practice:  ['practice', 'riyaz'],
+  noteWord:  ['note', 'swara'],
+  lowOct:    ['lower octave', 'mandra saptak'],
+};
+export function term(key, s) { const v = VOCAB[key]; return v ? v[isIndian(s) ? 1 : 0] : key; }

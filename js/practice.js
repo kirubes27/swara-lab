@@ -3,9 +3,9 @@ import { audioCtx } from './audio.js';
 import { mic } from './audio.js';
 import { tanpura, guide } from './sound.js';
 import { PitchLane } from './lane.js';
-import { EXERCISES, parseSargam, makePlan, planRefAt, planCurves, scoredNotes, pitchMatchLines } from './exercises.js';
+import { EXERCISES, exText, parseSargam, makePlan, planRefAt, planCurves, scoredNotes, pitchMatchLines } from './exercises.js';
 import { analyzeTake, swaraBiasText, describeSwaraBias } from './coach.js';
-import { THAATS, saHzFrom, nearestSwara, swaraLabel, SWARA_LONG, wrapCents, westernName, hzToMidi, median, clamp } from './music.js';
+import { SCALES, scaleList, scaleLabel, saHzFrom, nearestSwara, swaraLabel, noteText, isIndian, term, wrapCents, westernName, hzToMidi, median, clamp } from './music.js';
 import { settings, logActivity } from './store.js';
 import { h, toast, ensureMic, tipList } from './ui.js';
 
@@ -39,7 +39,8 @@ export class LiveReadout {
     this.m.textContent = label;
     this.m.className = 'ro-main ' + cls;
     this.d.textContent = (dev > 0 ? '+' : '') + Math.round(dev) + '¢' + (!isNaN(refC) ? ' vs target' : '');
-    this.s.textContent = settings.notation === 'western' ? SWARA_LONG[ns.idx] : westernName(hzToMidi(saHz) + x / 100) + ' · ' + (saHz * Math.pow(2, x / 1200)).toFixed(0) + ' Hz';
+    const hz = (saHz * Math.pow(2, x / 1200)).toFixed(0) + ' Hz';
+    this.s.textContent = settings.notation === 'western' ? hz : westernName(hzToMidi(saHz) + x / 100) + ' · ' + hz;
     return cls;
   }
 }
@@ -74,18 +75,24 @@ export class ExercisePlayer {
     if (this.stopBreath) { this.stopBreath(); this.stopBreath = null; }
     this.wrap.style.display = '';
     this.id = id;
-    const def = id === 'custom' ? { name: 'Swara Pad (your own line)', text: custom || 'S R G m P - P m G R S -', bpm: 60, echo: true, tanpura: true,
-      what: 'Type any sargam line, e.g. a phrase from your song, and practise it as a drill. Notation: S r R g G m M P d D n N (lowercase = komal, M = tivra), N. = lower octave, S\' = upper, - = hold, _ = rest, S~G = meend, (N)S = kan, G* = gamak, [S R G m] = 4 notes in one beat.',
-      why: 'Breaking a hard line into slow, exact sargam is how classical students learn compositions. Once it\'s accurate slowly, raise the tempo in small steps.' } : EXERCISES[id];
+    const ind = isIndian(settings);
+    const def = id === 'custom' ? {
+      name: 'Note Pad: practise your own line', text: custom || (ind ? 'S R G m P - P m G R S -' : '1 2 3 4 5 - 5 4 3 2 1 -'), bpm: 60, echo: true, tanpura: true,
+      what: ind
+        ? 'Type any sargam line, e.g. a phrase from your song, and practise it as a drill. S r R g G m M P d D n N (lowercase = komal, M = tivra), N. = lower octave, S\' = upper, - = hold, _ = rest, S~G = meend, (N)S = kan, G* = gamak, R% = vibrato, [S R G m] = 4 notes in one beat. Numbers work too (1 2 b3 4 5).'
+        : 'Type any line as scale degrees of the key (1 = key note) and practise it as a drill. 1 2 b3 3 4 #4 5 b6 6 b7 7 8, .5 = lower octave, 1\' = upper, - = hold, _ = rest, 1~5 = slide, (2)1 = grace note, 3* = trill, 5% = vibrato, [5 4 3 1] = 4 notes in one beat.',
+      why: 'Breaking a hard line into slow, exact notes is how trained singers learn tricky passages. Once it\'s accurate slowly, raise the tempo in small steps.',
+    } : EXERCISES[id];
     this.def = def;
+    this.tx = id === 'custom' ? def : exText(def, settings);
     this.text = null;
     this.bpm = def.bpm || 60;
     this.echo = def.echo !== false;
     this.head.innerHTML = '';
     this.head.append(
-      h('h3', {}, def.name),
-      h('p', { class: 'what' }, def.what),
-      h('details', { class: 'why' }, h('summary', {}, 'Why this helps'), h('p', {}, def.why)),
+      h('h3', {}, this.tx.name),
+      h('p', { class: 'what' }, this.tx.what),
+      h('details', { class: 'why' }, h('summary', {}, 'Why this helps'), h('p', {}, this.tx.why)),
     );
     this.result.innerHTML = '';
     this.controls.innerHTML = '';
@@ -101,8 +108,8 @@ export class ExercisePlayer {
     items.push(h('label', { class: 'ctl' }, 'Tempo ', tempo, ' ', bpmOut));
     items.push(h('label', { class: 'ctl', title: 'Hide your pitch line while singing; see it afterwards. Builds independence from the screen.' }, blind, ' Blind'));
     if (def.thaatText || def.kind === 'match' || id === 'custom') {
-      const sel = h('select', { onchange: (e) => (this.thaat = e.target.value) }, ...Object.keys(THAATS).map((k) => h('option', { value: k, selected: k === settings.thaat }, `${k} / ${THAATS[k].carnatic}`)));
-      this.thaat = settings.thaat;
+      this.scaleKey = SCALES[settings.scale] ? settings.scale : 'major';
+      const sel = h('select', { onchange: (e) => { this.scaleKey = e.target.value; this.preview(); } }, ...scaleList(settings).map((k) => h('option', { value: k, selected: k === this.scaleKey }, scaleLabel(k, settings))));
       items.push(h('label', { class: 'ctl' }, 'Scale ', sel));
     }
     if (id === 'custom') {
@@ -116,7 +123,7 @@ export class ExercisePlayer {
 
   buildLines() {
     const def = this.def;
-    const scale = THAATS[this.thaat || settings.thaat].notes;
+    const scale = (SCALES[this.scaleKey] || SCALES[settings.scale] || SCALES.major).notes;
     const opts = { bpm: this.bpm, tuning: settings.tuning, scale };
     if (def.kind === 'match') {
       const sa = saHzFrom(settings);
@@ -153,7 +160,7 @@ export class ExercisePlayer {
     this.lane.refAt = (t) => planRefAt(plan, t);
     this.lane.regions = plan.segments.map((s) => ({ start: s.start, end: s.end, kind: s.mode === 'listen' ? 'listen' : 'sing', label: s.mode === 'listen' ? 'Listen' : s.mode === 'sing' ? 'Your turn' : 'Sing along' }));
     this.lane.tol = settings.tol; this.lane.octaveFree = settings.octaveFree;
-    this.lane.scale = this.def.kind === 'match' || this.def.thaatText ? THAATS[this.thaat || settings.thaat].notes : null;
+    this.lane.scale = this.def.kind === 'match' || this.def.thaatText ? (SCALES[this.scaleKey] || SCALES.major).notes : null;
     this.lane.user = [];
     this.lane.message = '';
   }
@@ -257,7 +264,7 @@ export class ExercisePlayer {
       res.wobble != null ? stat('Wobble', '±' + Math.round(res.wobble) + '¢') : null,
     );
     const chips = h('div', { class: 'note-chips' }, ...notes.map((n) => {
-      const lab = n.e.note ? swaraLabel(n.e.note.idx, n.e.note.oct, settings.notation === 'western' ? 'hindustani' : settings.notation) : '·';
+      const lab = n.e.note ? noteText(n.e.note.idx, n.e.note.oct, saHzFrom(settings), settings) : '·';
       const cls = isNaN(n.md) ? 'miss' : n.ok ? 'good' : Math.abs(n.md) <= settings.tol * 2.2 ? 'ok' : 'bad';
       return h('span', { class: 'chip ' + cls, title: isNaN(n.md) ? 'not sung' : `${n.md > 0 ? '+' : ''}${Math.round(n.md)}¢` }, lab, h('small', {}, isNaN(n.md) ? '–' : `${n.md > 0 ? '+' : ''}${Math.round(n.md)}`));
     }));

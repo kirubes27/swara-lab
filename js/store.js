@@ -8,10 +8,11 @@ export const DEFAULT_SETTINGS = {
   saMidi: 49,          // C#3: a common male Sa. Range test suggests a personal one.
   saFine: 0,
   saChosen: false,
-  notation: 'hindustani',
+  notation: 'western',   // 'western' = general style; 'hindustani' / 'carnatic' = Indian style
   tuning: 'et',
   tol: 35,
-  thaat: 'Bilawal',
+  scale: 'major',
+  droneSound: 'auto',   // auto = tanpura in Indian style, soft pad otherwise
   tanpuraFirst: 'P',
   tanpuraVol: 0.35,
   guideVol: 0.6,
@@ -21,10 +22,16 @@ export const DEFAULT_SETTINGS = {
   rangeLowMidi: null,
   rangeHighMidi: null,
   octaveFree: true,
+  showOrnaments: false, // song lines: plain notes vs notes with ornament symbols
   blind: false,
 };
 
 export const settings = Object.assign({}, DEFAULT_SETTINGS, lsGet('settings', {}));
+if (!settings.styleVersion) { // v2: general style became the default (Indian style is opt-in)
+  settings.notation = 'western'; settings.styleVersion = 2;
+  if (settings.thaat) delete settings.thaat;
+  lsSet('settings', settings);
+}
 const listeners = new Set();
 export function saveSettings(patch = {}) {
   Object.assign(settings, patch);

@@ -1,5 +1,5 @@
 // Exercise model: a mini sargam notation, plan builder, target-contour lookup and library.
-import { swaraCents, THAATS, SWARA_SHORT, SWARA_LONG } from './music.js';
+import { swaraCents, SCALES, SWARA_SHORT, SWARA_LONG, isIndian } from './music.js';
 
 const LETTERS = { S: 0, r: 1, R: 2, g: 3, G: 4, m: 5, M: 6, P: 7, d: 8, D: 9, n: 10, N: 11 };
 
@@ -13,12 +13,22 @@ const LETTERS = { S: 0, r: 1, R: 2, g: 3, G: 4, m: 5, M: 6, P: 7, d: 8, D: 9, n:
 //   G*                         gamak: oscillate G with the next scale note
 //   g^                         andolan: slow gentle swing below the note
 //   [S R G m]                  several notes squeezed into one beat (fast phrases)
+const MAJOR = [0, 2, 4, 5, 7, 9, 11];
 function parseNote(tok) {
-  const m = tok.match(/^(\.*)([SrRgGmMPdDnN])((?:'|\.)*)$/);
+  // sargam letter (S r R ...) or scale degree (1-8 with b/#; 8 = octave), with octave marks
+  const m = tok.match(/^(\.*)([SrRgGmMPdDnN]|[b#]?[1-8])((?:'|\.)*)$/);
   if (!m) return null;
   let oct = -m[1].length;
   for (const ch of m[3]) oct += ch === "'" ? 1 : -1;
-  return { idx: LETTERS[m[2]], oct };
+  let idx;
+  if (/[1-8]/.test(m[2])) {
+    const acc = m[2][0] === 'b' ? -1 : m[2][0] === '#' ? 1 : 0;
+    const d = +m[2].slice(-1);
+    idx = MAJOR[(d - 1) % 7] + acc + (d === 8 ? 12 : 0); // 8 = octave
+    if (idx < 0) { idx += 12; oct -= 1; }
+    if (idx > 11) { idx -= 12; oct += 1; }
+  } else idx = LETTERS[m[2]];
+  return { idx, oct };
 }
 
 function tokenize(text) {
@@ -60,7 +70,7 @@ function itemEvents(item, t, dur, ctx) {
   const km = body.match(/^\(([^)]+)\)(.+)$/);
   if (km) { kan = parseNote(km[1]); body = km[2]; }
   let mod = '';
-  const mm = body.match(/([*^]+)$/);
+  const mm = body.match(/([*^%]+)$/);
   if (mm) { mod = mm[1]; body = body.slice(0, -mod.length); }
   const parts = body.split('~').map(parseNote);
   if (parts.some((p) => !p)) throw new Error(`Can't read "${item}"`);
@@ -78,6 +88,7 @@ function itemEvents(item, t, dur, ctx) {
     const e = { kind: 'note', t: cur, dur: rem, c0: cents[0], note: labels[0] };
     if (mod.includes('*')) { e.osc = { c1: nextScaleNote(cents[0], ctx.scale, ctx.tuning), rate: 4.5 }; e.orn = 'gamak'; }
     if (mod.includes('^')) { e.osc = { c1: cents[0] - 45, rate: 1.4 }; e.orn = 'andolan'; }
+    if (mod.includes('%')) { e.osc = { c1: cents[0] - 40, rate: 5.5, centred: true }; e.orn = 'vibrato'; }
     ev.push(e);
   } else {
     // meend: brief hold, smooth glide(s), land
@@ -95,7 +106,7 @@ function itemEvents(item, t, dur, ctx) {
   return ev;
 }
 
-export function parseSargam(text, { bpm = 60, tuning = 'et', scale = THAATS.Bilawal.notes } = {}) {
+export function parseSargam(text, { bpm = 60, tuning = 'et', scale = SCALES.major.notes } = {}) {
   const ctx = { bpm, tuning, scale };
   const toks = tokenize(text);
   const events = [];
@@ -154,6 +165,7 @@ function evAt(e, t) {
   }
   if (e.osc) {
     const ramp = Math.min(1, x / 0.15);
+    if (e.osc.centred) return e.c0 + ((e.c0 - e.osc.c1) / 2) * ramp * Math.sin(2 * Math.PI * e.osc.rate * x); // vibrato: ±half-width around the note
     return e.c0 + (e.osc.c1 - e.c0) * ramp * (0.5 - 0.5 * Math.cos(2 * Math.PI * e.osc.rate * x));
   }
   return e.c0;
@@ -232,47 +244,75 @@ export function alankar(scale, k = 3) {
   return asc.join(' | ') + ' | ' + desc.join(' | ');
 }
 
+// Each exercise has general wording (any style of song) plus optional Indian-style
+// wording (i: {name, what, why}) used when the app is set to Indian notation.
 export const EXERCISES = {
   breath: { name: 'Breath: sustained hiss', kind: 'breath', mins: 1.5,
     what: 'Inhale low and quietly for 4 counts (belly and lower ribs expand, shoulders stay down), then hiss "ssss" steadily for as long as you can without squeezing.',
-    why: 'Singing phrases need a slow, controlled exhale. The hiss lets you practise steady airflow without the voice; the mic measures how long you sustain it.' },
-  saHold: { name: 'Sa sadhana: hold Sa', text: 'S - - - - - _ S - - - - - _', bpm: 60, echo: false, mins: 1, tanpura: true,
-    what: 'Hum (lips closed, "mmm") or sing "aa" on Sa with the tanpura and keep the line flat and centred for 6 beats.',
-    why: 'Holding Sa against a drone is the oldest exercise in Indian music. It trains your ear to lock onto the tonic and gives you a stable pitch to measure everything else from.' },
-  sirens: { name: 'Lip-trill sirens', text: 'S~P~S\' - S\'~P~S - S~P - P~S -', bpm: 50, echo: false, mins: 1.5,
+    why: 'Long phrases need a slow, controlled exhale. The hiss trains steady airflow without the voice; the mic times how long you sustain it.' },
+  saHold: { name: 'Long tones on the key note', text: 'S - - - - - _ S - - - - - _', bpm: 60, echo: false, mins: 1, tanpura: true,
+    what: 'Hum (lips closed, "mmm") or sing "ah" on the key note with the drone, and keep the line flat and centred for 6 beats.',
+    why: 'Long tones against a reference pitch are a staple of every vocal tradition. They train your ear to lock onto a pitch and build a steady, supported tone.',
+    i: { name: 'Sa sadhana: hold Sa', what: 'Hum ("mmm") or sing "aa" on Sa with the tanpura, and keep the line flat and centred for 6 beats.',
+      why: 'Holding Sa against a drone is the oldest exercise in Indian music. It trains your ear to lock onto the tonic and gives you a stable pitch to measure everything else from.' } },
+  sirens: { name: 'Lip-trill sirens', text: "S~P~S' - S'~P~S - S~P - P~S -", bpm: 50, echo: false, mins: 1.5,
     what: 'Do a lip trill ("brrr"), or hum through a straw, and slide smoothly up and down following the line. Keep it light; the trill should not stop.',
-    why: 'Semi-occluded vocal tract exercises (lip trills, straw phonation, humming) back-pressure the vocal folds so they vibrate with less effort, which makes them a safe warm-up and good for range (Titze 2006).' },
+    why: 'Semi-occluded vocal tract exercises (lip trills, straw phonation, humming) create back-pressure that lets the vocal folds vibrate with less effort. That makes them a safe warm-up and good for range (Titze 2006).' },
   fiveNote: { name: '5-note scale, moving up', text: 'S R G m P m G R S -', bpm: 100, echo: false, mins: 2, transposeReps: 5, tanpura: false,
-    what: 'Sing on "ma-a-a-a-a" or "nee". Each repetition starts one semitone higher. Stop at the first strain. Range is built gradually, never forced.',
+    what: 'Sing 1-2-3-4-5-4-3-2-1 on "mah" or "nee". Each repetition starts a semitone higher. Stop at the first sign of strain. Range is built gradually, never forced.',
     why: 'Moving a simple pattern up in small steps lets your voice pass through register changes gradually instead of jumping into them.' },
-  aroha: { name: 'Aroha / Avaroha (scale)', thaatText: (sc) => arohaAvaroha(sc), bpm: 66, echo: true, mins: 2, tanpura: true,
+  aroha: { name: 'Scale up & down', thaatText: (sc) => arohaAvaroha(sc), bpm: 66, echo: true, mins: 2, tanpura: true,
     what: 'Listen to the scale, then sing it back. Land each note in the centre of its band before moving on.',
-    why: 'Call-and-response gives your ear a clear target first. Over time this tightens your auditory-motor mapping, the main thing that separates accurate singers from "off-key" ones (Pfordresher & Brown 2007; Hutchins & Peretz 2012).' },
-  alankar3: { name: 'Alankar: groups of 3', thaatText: (sc) => alankar(sc, 3), bpm: 80, echo: true, mins: 2.5, tanpura: true,
-    what: 'S R G, R G m, G m P ... then back down. Keep notes evenly spaced and in tune.',
-    why: 'Alankars are the standard swara-agility drills of both Hindustani and Carnatic training. They build note-to-note accuracy and the clean, fast note changes that taans and sangatis need.' },
-  alankar4: { name: 'Alankar: groups of 4', thaatText: (sc) => alankar(sc, 4), bpm: 84, echo: true, mins: 3, tanpura: true,
-    what: 'S R G m, R G m P ... Try it at slow speed until 90%+ of notes are green, then raise the speed.',
-    why: 'Longer groups train your working memory for melodic patterns as well as your accuracy.' },
-  meend: { name: 'Meend (glides)', text: 'S~G - G~S - S~P - P~S - G~P - P~G -', bpm: 50, echo: true, mins: 2, tanpura: true,
-    what: 'Slide continuously between the two notes: no steps, no breaks, constant volume. Watch the curve match the shape of the band.',
-    why: 'Meend is everywhere in film songs. Practise glides slowly so that you pass through every microtone in between and the slide stays smooth.' },
-  kan: { name: 'Kan swar (grace notes)', text: '(R)S - (S)N. - (P)G - (m)G - (D)P - (S\')N -', bpm: 50, echo: true, mins: 2, tanpura: true,
-    what: 'Touch the small grace note very briefly, then settle on the main note. Pressure goes on the main note, and the kan is barely there.',
-    why: 'Many "two notes at once" sounds in Indian singing are actually a kan: a very brief touch of a neighbouring note. Slowed down, you can see it as a little hook on the curve.' },
-  gamak: { name: 'Gamak & andolan (oscillations)', text: 'G* - - P* - - g^ - - - S - -', bpm: 50, echo: true, mins: 2, tanpura: true,
-    what: 'Gamak (*): an even, controlled oscillation between the note and the next scale note. Andolan (^): a slow, gentle swing just below the note. Start slow, keep the voice relaxed, and don\'t shake the jaw.',
-    why: 'Oscillating ornaments come from controlled pitch changes in the larynx, not tremolo. Slow, accurate repetition comes first and speed comes later.' },
-  intervals: { name: 'Interval jumps', text: 'S P S - S m S - S G S - S S\' S - S D S - S R S -', bpm: 60, echo: true, mins: 2, tanpura: true,
-    what: 'Jump cleanly from Sa to each note and back. Hear the target in your head before you sing it.',
-    why: 'Leaps are where beginners most often miss. Pre-hearing ("audiation") the target note before singing it improves accuracy.' },
+    why: 'Call-and-response gives your ear a clear target first. Over time this tightens your ear-to-voice mapping, the main thing that separates accurate singers from "off-key" ones (Pfordresher & Brown 2007; Hutchins & Peretz 2012).',
+    i: { name: 'Aroha / Avaroha', what: 'Listen to the aroha and avaroha, then sing them back. Land each swara in the centre of its band before moving on.' } },
+  alankar3: { name: 'Scale patterns: groups of 3', thaatText: (sc) => alankar(sc, 3), bpm: 80, echo: true, mins: 2.5, tanpura: true,
+    what: '1-2-3, 2-3-4, 3-4-5 … to the top, then back down. Keep the notes even and in tune.',
+    why: 'Sequenced scale patterns are standard agility drills in classical, jazz and pop training (and alankars in Indian music). They build the clean, fast note changes that runs and riffs need.',
+    i: { name: 'Alankar: groups of 3', what: 'S R G, R G m, G m P … then back down. Keep the notes even and in tune.' } },
+  alankar4: { name: 'Scale patterns: groups of 4', thaatText: (sc) => alankar(sc, 4), bpm: 84, echo: true, mins: 3, tanpura: true,
+    what: '1-2-3-4, 2-3-4-5 … Practise slowly until 90%+ of notes are green, then raise the tempo.',
+    why: 'Longer groups train your memory for melodic patterns as well as your accuracy.',
+    i: { name: 'Alankar: groups of 4', what: 'S R G m, R G m P … Practise slowly until 90%+ of notes are green, then raise the tempo.' } },
+  meend: { name: 'Slides (portamento)', text: 'S~G - G~S - S~P - P~S - G~P - P~G -', bpm: 50, echo: true, mins: 2, tanpura: true,
+    what: 'Slide continuously between the two notes: no steps, no breaks, even volume. Watch your curve match the shape of the band.',
+    why: 'Slides are everywhere: soul and R&B scoops, rock and pop fall-offs, Indian meend. Practising them slowly teaches you to control the whole path between notes, not just where it ends.',
+    i: { name: 'Meend (glides)', why: 'Meend is everywhere in Indian film songs. Practise glides slowly so you pass through every microtone in between and the slide stays smooth.' } },
+  vibrato: { name: 'Vibrato', text: 'S - S% - - - G - G% - - - P - P% - - - S - - -', bpm: 60, echo: true, mins: 2, tanpura: true,
+    what: 'Hold each note straight first, then let it "spin" into a gentle, even wobble (about 5–6 times per second, a quarter-tone or so wide). It should come from relaxed breath, not from shaking the jaw or throat.',
+    why: 'A free, even vibrato appears when the voice is relaxed and well supported. Most singers (pop, rock, soul, classical) control when it starts. Alternating straight and vibrato tones trains that control.' },
+  kan: { name: 'Grace notes & flips', text: "(R)S - (S)N. - (P)G - (m)G - (D)P - (S')N -", bpm: 50, echo: true, mins: 2, tanpura: true,
+    what: 'Touch the small grace note very briefly, then settle on the main note. The weight goes on the main note; the grace note is a flick.',
+    why: 'Quick flips and grace notes give pop, soul and folk singing its expressive edge. Slowed down, you can see them as little hooks on the curve.',
+    i: { name: 'Kan swar (grace notes)', what: 'Touch the small grace note very briefly, then settle on the main note. The weight goes on the main note; the kan is barely there.',
+      why: 'Many "two notes at once" sounds in Indian singing are actually a kan: a split-second touch of a neighbouring note. Slowed down, you can see it as a little hook on the curve.' } },
+  gamak: { name: 'Trills & shakes', text: 'G* - - P* - - g^ - - - S - -', bpm: 50, echo: true, mins: 2, tanpura: true,
+    what: 'Oscillate evenly between the note and the next scale note (*), then try a slow, gentle swing just below a note (^). Start slow and keep the voice relaxed.',
+    why: 'Trills and shakes are controlled pitch changes, not tremolo. Get them slow and accurate first; speed comes later.',
+    i: { name: 'Gamak & andolan', what: 'Gamak (*): an even, controlled oscillation between the note and the next scale note. Andolan (^): a slow, gentle swing just below the note. Start slow and keep the voice relaxed.',
+      why: 'Gamakas come from controlled pitch changes in the larynx, not from shaking. Slow, accurate repetition comes first; speed comes later.' } },
+  runs: { name: 'Runs & riffs', text: "[P D S' D] [P G R S] - - [G P D S'] [D P G R] S - - _", bpm: 48, echo: true, mins: 2.5, tanpura: true,
+    what: 'Four quick notes per beat on the major pentatonic, the scale most pop/R&B riffs live in. Start at a slow tempo, keep every note distinct, and only speed up when it\'s clean.',
+    why: 'Fast melismatic runs (R&B riffs, Indian taans and murkis) are built from scale fragments. Practised slowly, they become automatic patterns you can drop into songs.',
+    i: { name: 'Fast phrases (taan / murki)', what: 'Four quick swaras per beat. Start slow, keep every swara distinct, and only speed up when it\'s clean.' } },
+  flips: { name: 'Register flips (chest ↔ head)', text: "S - S' - S - - _ P. - P - P. - - _ S~S'~S - -", bpm: 56, echo: true, mins: 2, tanpura: true,
+    what: 'Jump an octave and let the top note be light (head voice or falsetto), then come back down. Do it quietly. A small "flip" in the sound is fine; we\'re learning to control it.',
+    why: 'Many singers (Jeff Buckley, Bon Iver, Arijit Singh) move expressively between chest and head voice. Practising light octave leaps builds a smoother, controllable transition.' },
+  intervals: { name: 'Interval jumps', text: "S P S - S m S - S G S - S S' S - S D S - S R S -", bpm: 60, echo: true, mins: 2, tanpura: true,
+    what: 'Jump cleanly from the key note to each note and back. Hear the target in your head before you sing it.',
+    why: 'Leaps are where beginners miss most. Pre-hearing the target note ("audiation") before singing improves accuracy.' },
   pitchMatch: { name: 'Pitch-match game', kind: 'match', mins: 2.5, tanpura: true,
-    what: 'The app plays a random swara, and you sing it back. 10 rounds. The score rewards quick, accurate landing.',
-    why: 'Matching single notes with immediate feedback is the most direct way to train ear-to-voice mapping, and visual feedback during this kind of practice has been shown to improve accuracy (Welch, Howard & Rush 1989).' },
-  cooldown: { name: 'Cool-down: soft descending hum', text: "P~S - m G R S - - P~S - -", bpm: 50, echo: false, mins: 1, tanpura: true,
+    what: 'The app plays a random note, and you sing it back. 10 rounds. The score rewards quick, accurate landing.',
+    why: 'Matching single notes with immediate feedback is the most direct way to train ear-to-voice mapping, and visual feedback during this kind of practice improves accuracy (Welch, Howard & Rush 1989).' },
+  cooldown: { name: 'Cool-down: soft descending hum', text: 'P~S - m G R S - - P~S - -', bpm: 50, echo: false, mins: 1, tanpura: true,
     what: 'Hum gently and slide down. Quiet, easy, no pressure.',
-    why: 'Gentle, low-effort phonation after practice helps the voice settle back to speaking pitch.' },
+    why: 'Gentle, low-effort voicing after practice helps the voice settle back to its speaking pitch.' },
 };
+
+// Wording for the current style.
+export function exText(def, s) {
+  const ind = isIndian(s) && def.i ? def.i : {};
+  return { name: ind.name || def.name, what: ind.what || def.what, why: ind.why || def.why };
+}
 
 export const WARMUP_ROUTINE = ['breath', 'saHold', 'sirens', 'fiveNote', 'aroha', 'meend', 'cooldown'];
 

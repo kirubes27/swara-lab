@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>Swara Lab · singing trainer</title>
-<meta name="description" content="A free, personal singing trainer for Indian songs: live pitch tracking against a tanpura, warm-ups, alankars, ornaments (meend, kan, gamak), and a song studio that extracts the melody from any song so you can see exactly where your notes go off.">
+<meta name="description" content="A free, personal singing trainer for any song: live pitch tracking, warm-ups, scale and ornament drills (vibrato, runs, slides, falsetto flips, Indian gamakas), and a song studio that extracts the melody from any song so you can see exactly where your notes go off.">
 <meta name="theme-color" content="#0f1115">
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Ccircle cx='32' cy='32' r='30' fill='%23f39c3d'/%3E%3Cpath d='M10 38c8-14 14 6 22-8s14 4 22-6' stroke='%230f1115' stroke-width='5' fill='none' stroke-linecap='round'/%3E%3C/svg%3E">
 <link rel="stylesheet" href="css/style.css">
@@ -14,7 +14,7 @@
   <a class="brand" href="#today"><span class="logo" aria-hidden="true"></span>Swara Lab</a>
   <div class="top-ctl">
     <button id="saChip" class="chip-btn" type="button">Sa</button>
-    <button id="tanpuraBtn" class="chip-btn" type="button" title="Tanpura drone on your Sa">🪕 Tanpura</button>
+    <button id="tanpuraBtn" class="chip-btn" type="button" title="Drone on your key note">◎ Drone</button>
     <button id="micBtn" class="chip-btn" type="button" title="Microphone"><span id="micLevel" class="lvl" aria-hidden="true"></span>🎤</button>
   </div>
 </header>
@@ -38,7 +38,7 @@
   <section id="page-settings" class="page" hidden></section>
   <section id="page-learn" class="page prose" hidden>
     <h1>Learning to sing on your own</h1>
-    <p class="lead">Short version: <strong>sing in your key, practise little and often, always compare what you sang with the target, and slowly take away the visual aids.</strong> The rest of this page explains why, then gives fixes for the problems beginners run into most.</p>
+    <p class="lead">Short version: <strong>sing in your key, practise a little every day, always compare what you sang with the target, and slowly take away the visual aids.</strong> This works for any song, whether it's Jeff Buckley, a Tamil film song or a musical theatre number. Below: why, plus fixes for the most common problems.</p>
 
     <h2>What the research says</h2>
     <div class="cards2">
@@ -52,24 +52,24 @@
         <p>In motor learning, constant feedback during practice can boost performance while hurting retention, because you come to depend on it (the "guidance hypothesis"). So alternate: learn with the line, then sing with the song muted or in Blind mode and check afterwards.</p>
         <p class="cite">Salmoni, Schmidt &amp; Walter (1984), <i>Psychological Bulletin</i> 95(3).</p></div>
       <div class="card"><h3>Imitation is easier in your own range</h3>
-        <p>Poor-pitch singers imitate recordings of <em>their own</em> voice more accurately than other voices. Matching a very different voice (e.g. a high male playback singer) is extra hard. Transpose to your key, and listen back to your own takes.</p>
+        <p>Poor-pitch singers imitate recordings of <em>their own</em> voice more accurately than other voices. Copying a very different voice (a high tenor, a female singer, a playback singer) is extra hard. Transpose to your key, and listen back to your own takes.</p>
         <p class="cite">Pfordresher &amp; Mantell (2014), <i>Cognitive Psychology</i> 70.</p></div>
       <div class="card"><h3>Warm up with semi-occluded exercises</h3>
-        <p>Lip trills, humming and straw phonation create back-pressure that makes the vocal folds vibrate with less effort and impact. That makes them a safe, effective warm-up and good for working through register breaks.</p>
+        <p>Lip trills, humming and straw phonation create back-pressure that lets the vocal folds vibrate with less effort and impact. That makes them a safe, effective warm-up, and good for smoothing out register breaks.</p>
         <p class="cite">Titze (2006), <i>J. Speech, Language &amp; Hearing Research</i> 49(2).</p></div>
       <div class="card"><h3>Little and often, slow first</h3>
-        <p>Distributed practice (20 minutes a day) consolidates motor skills better than one long weekly session. Practising fast ornaments slowly and accurately, then gradually speeding up, is standard both in motor-learning research and in the guru–shishya tradition (riyaz).</p>
+        <p>Distributed practice (20 minutes a day) consolidates motor skills better than one long weekly session. Practising fast passages slowly and accurately, then gradually speeding up, is standard in motor-learning research and in every singing tradition.</p>
         <p class="cite">Spacing effect: e.g. Shea, Lai, Black &amp; Park (2000), <i>Human Movement Science</i> 19.</p></div>
     </div>
-    <p class="muted small">Where the app can't help: a teacher can see and hear tension, posture and tone quality that a pitch tracker can't measure. If you can, get an occasional lesson (even online) to check technique, and use this app for daily riyaz between lessons.</p>
+    <p class="muted small">Where the app can't help: a teacher can see and hear tension, posture and tone quality that a pitch tracker can't measure. If you can, get an occasional lesson (even online) to check technique, and use this app for daily practice in between.</p>
 
-    <h2>How to learn a song like <i>Unnai Kaanadhu Naan</i></h2>
+    <h2>How to learn any song</h2>
     <ol>
-      <li><strong>Build the melody guide</strong> in Song Studio. Check the detected Sa (phrases should come to rest on the Sa line), and see whether the melody fits your range.</li>
-      <li><strong>Pick your key.</strong> If lines go above your comfortable top, transpose the practice copy down, or sing an octave lower. Don't force high notes.</li>
+      <li><strong>Build the melody guide</strong> in Song Studio. Check the detected key note (phrases usually come to rest on the bold line), and see whether the melody fits your range.</li>
+      <li><strong>Pick your key.</strong> If lines go above your comfortable top, transpose down or sing an octave lower. Original keys suit the original singer, not you.</li>
       <li><strong>Learn line by line.</strong> Click a line to loop it. First <em>listen</em> 3–4 times at 0.75× with the guide tone on, and watch the shape.</li>
-      <li><strong>Sing on "aa" first, words later.</strong> Get the melody and ornaments on a vowel, then add lyrics.</li>
-      <li><strong>Sargam it.</strong> Each line shows an approximate sargam. For a hard passage, type it into the <a href="#drills/custom">Swara Pad</a> and drill it slowly with the tanpura.</li>
+      <li><strong>Sing on "ah" first, words later.</strong> Get the melody and ornaments on a vowel, then add lyrics.</li>
+      <li><strong>Write out the notes.</strong> Each line shows its approximate notes. For a hard passage, type it into the <a href="#drills/custom">Note Pad</a> and drill it slowly over the drone.</li>
       <li><strong>Speed up in steps:</strong> 0.6× → 0.75× → 0.85× → 1×. Move on when you get two good takes in a row.</li>
       <li><strong>Remove the crutches:</strong> switch to Song muted (guide tone only), then Blind mode, then sing with the original and listen back to your recording.</li>
     </ol>
@@ -77,32 +77,37 @@
     <h2>Fixes for common problems</h2>
     <div class="faq">
       <details><summary>I can't reach the high notes</summary>
-        <ul><li>First check the key. Transposing 2–3 semitones down is not cheating; playback singers' keys are chosen for their voices.</li>
+        <ul><li>First check the key. Transposing 2–3 semitones down is not cheating; singers pick keys for their own voices.</li>
         <li>Don't push volume to go higher. Lighter is easier up there. Practise the high line on a lip trill or "ng" hum, then open to a vowel.</li>
-        <li>Narrow vowels help on high notes: "aa" → slightly towards "uh"/"aw". Keep the jaw loose and the chin level, not lifted.</li>
-        <li>Build range gradually: <a href="#drills/sirens">sirens</a> and the <a href="#drills/fiveNote">5-note scale moving up</a>, a few semitones beyond comfortable, never to strain.</li></ul></details>
-      <details><summary>My voice cracks or breaks between low and high</summary>
-        <ul><li>The break is the transition between registers (chest-dominant and head-dominant). Everyone has it.</li>
+        <li>Narrow the vowel on high notes ("ah" towards "uh"). Keep the jaw loose and the chin level, not lifted.</li>
+        <li>Build range gradually: <a href="#drills/sirens">sirens</a> and the <a href="#drills/fiveNote">5-note scale moving up</a>, a little beyond comfortable, never to strain.</li></ul></details>
+      <details><summary>My voice cracks or flips between low and high</summary>
+        <ul><li>The break is the transition between chest voice and head voice (or falsetto). Everyone has one.</li>
         <li>Sirens on a lip trill through the break, quietly, daily. The goal is a smooth blend ("mix"), not a louder chest voice.</li>
-        <li>Lower the volume as you approach the break, and don't let the throat squeeze.</li></ul></details>
+        <li>Lower the volume as you approach the break, and don't let the throat squeeze.</li>
+        <li>Some singers use the flip on purpose: Jeff Buckley, Bon Iver, yodelling, the "cry" in country and in Indian film songs. Practise it as a <em>controlled</em> move with the <a href="#drills/flips">register-flip drill</a>.</li></ul></details>
+      <details><summary>Falsetto, head voice and "mix"</summary>
+        <ul><li><strong>Falsetto:</strong> light, airy, thin folds. It's easy to get high in, but it's breathy.</li>
+        <li><strong>Head voice:</strong> also light, but with a clearer, more connected tone.</li>
+        <li><strong>Mix:</strong> a blend that carries some chest-voice strength higher up. It takes months of light, regular practice.</li>
+        <li>Start with quiet octave slides on "oo" or "ng". Never force the top.</li></ul></details>
       <details><summary>I'm consistently flat (or sharp)</summary>
-        <ul><li>Flat: often low energy, tiredness, or a dark, swallowed vowel. Brighten the vowel slightly, give more breath support, keep the tanpura audible.</li>
-        <li>Sharp: usually tension or over-blowing. Sing softer, relax shoulders and jaw.</li>
-        <li>Check your <a href="#progress">microtone map</a>: if one swara is off (e.g. Ga is sharp), drill it specifically with the <a href="#drills/pitchMatch">pitch-match game</a>.</li></ul></details>
-      <details><summary>My held notes wobble</summary>
-        <ul><li>Steadiness comes from steady airflow. Do the <a href="#drills/breath">breath hiss</a> and <a href="#drills/saHold">Sa sadhana</a> daily.</li>
-        <li>Breathe low (belly and lower ribs), not high in the chest. Don't let the breath collapse at the end of the phrase.</li></ul></details>
-      <details><summary>"Two notes at once", the fast curly bits</summary>
-        <p>What sounds like two notes at once is usually one of these ornaments, performed very fast:</p>
-        <ul><li><strong>Kan swar:</strong> a split-second touch of a neighbouring note before the main note. On the pitch line it's a little hook.</li>
-        <li><strong>Murki:</strong> a quick 3–4 note turn (e.g. P–d–P–m), like a fast flourish.</li>
-        <li><strong>Gamak / gamaka:</strong> a controlled oscillation between notes. In Carnatic music, gamakas define the raga.</li>
-        <li><strong>Meend:</strong> a smooth glide through all the microtones between two notes.</li>
-        <li><strong>Andolan:</strong> a slow, gentle swing on a note (e.g. komal Ga in some ragas).</li>
-        <li><strong>Khatka:</strong> a sharp, emphasised cluster of notes, like a strong murki.</li></ul>
-        <p>Method: loop the line at 0.5–0.6×, turn on the guide tone, look at the <em>shape</em> of the curve, and copy it on "aa". Then drill the ornament on its own (<a href="#drills/kan">kan</a>, <a href="#drills/gamak">gamak</a>, <a href="#drills/meend">meend</a>). Speed comes last. A fast ornament sung loosely sounds worse than a slow one sung exactly.</p></details>
-      <details><summary>What are microtones and do I need them?</summary>
-        <p>Indian music places some notes slightly differently from a keyboard. Sung against a tanpura, shuddha Ga naturally sits around 386¢ above Sa (keyboard: 400¢), and certain ragas use characteristically low or high versions of a swara. Switch <a href="#settings">Swara positions</a> to "Just intonation" to see these targets, and use the ±15¢ tolerance for fine work. For film songs, follow the singer's curve. The reference line already includes their microtones.</p></details>
+        <ul><li>Flat: often low energy, tiredness, or a dark, swallowed vowel. Brighten the vowel slightly, give more breath support, keep the drone audible.</li>
+        <li>Sharp: usually tension or over-blowing. Sing softer, and relax the shoulders and jaw.</li>
+        <li>Check your <a href="#progress">tuning map</a>: if one note of the scale is off (e.g. the 3rd is sharp), drill it with the <a href="#drills/pitchMatch">pitch-match game</a>.</li></ul></details>
+      <details><summary>My held notes wobble (or I can't do vibrato)</summary>
+        <ul><li>Steadiness comes from steady airflow. Do the <a href="#drills/breath">breath hiss</a> and <a href="#drills/saHold">long tones</a> daily.</li>
+        <li>Real vibrato appears when the voice is free and supported. Don't fake it with the jaw. The <a href="#drills/vibrato">vibrato drill</a> alternates straight and vibrato tones so you learn to control it.</li></ul></details>
+      <details><summary>Fast, curly bits: riffs, runs, flips and ornaments</summary>
+        <p>What sounds like "two notes at once" is almost always a very fast ornament:</p>
+        <ul><li><strong>Runs / riffs (melisma):</strong> several notes on one syllable, as in R&amp;B, gospel and pop. Usually built from the pentatonic scale.</li>
+        <li><strong>Grace notes / flips:</strong> a split-second touch of a neighbouring note before the main one.</li>
+        <li><strong>Slides, scoops and fall-offs:</strong> gliding into or off a note (soul, rock, country).</li>
+        <li><strong>Vibrato:</strong> a regular wobble on a held note, about 5–7 times a second.</li>
+        <li><strong>In Indian music:</strong> <em>kan</em> (grace note), <em>murki</em> (quick 3–4 note turn), <em>gamak</em> (controlled oscillation between notes), <em>meend</em> (glide), <em>andolan</em> (slow swing).</li></ul>
+        <p>Method: loop the line at 0.5–0.6×, turn on the guide tone, look at the <em>shape</em> of the curve, and copy it on "ah". Then drill the move on its own (<a href="#drills/runs">runs</a>, <a href="#drills/kan">grace notes</a>, <a href="#drills/meend">slides</a>, <a href="#drills/vibrato">vibrato</a>). Speed comes last. A fast run sung loosely sounds worse than a slow one sung exactly.</p></details>
+      <details><summary>Microtones and "in-between" notes</summary>
+        <p>Not all music sits on piano keys. Blues and rock bend the 3rd and 7th between minor and major ("blue notes"). Indian classical music places some notes differently, and sung against a drone a major 3rd tends to sit around 386¢ (piano: 400¢). For any song, follow the singer's curve: the reference line already contains their bends. In Settings, "Just intonation" shows drone-natural targets, and ±15¢ tolerance is there for fine work.</p></details>
       <details><summary>I run out of breath in long phrases</summary>
         <ul><li>Plan breath points: listen for where the singer breathes, and mark them.</li>
         <li>Inhale low and silently; don't start a long phrase with a loud, pushed onset.</li>
@@ -111,22 +116,43 @@
         <p>Stop for the day. Singing should never hurt. Common causes: singing too high or loud for too long, not warming up, dehydration, or pushing through a cold. Hoarseness or pain lasting more than two weeks, or a sudden loss of voice, needs an ENT doctor.</p></details>
     </div>
 
-    <h2>Notation used in the app</h2>
+    <h2 id="indian-terms">Indian music terms, explained</h2>
+    <p class="small muted">You don't need these for most songs. They're here for when you learn Indian film or classical songs, or switch Settings → Music style to Indian.</p>
+    <dl class="gloss">
+      <dt>Sa, sargam, swara</dt><dd>Indian solfège. <b>Sa Re Ga Ma Pa Dha Ni</b> are the seven <i>swaras</i> (notes), like do-re-mi. <b>Sa</b> is the home note (tonic). It isn't a fixed pitch: each singer picks the Sa that suits their voice.</dd>
+      <dt>Komal / tivra</dt><dd>Flat / sharp versions of a note. Komal Re, Ga, Dha, Ni are a semitone lower (written lowercase: r g d n); tivra Ma is a semitone higher (M).</dd>
+      <dt>Saptak: mandra, madhya, taar</dt><dd>Octaves: low, middle and high. Written with a dot below (low) or above (high) the note.</dd>
+      <dt>Tanpura</dt><dd>A droning string instrument that plays Sa (and Pa) continuously, so you always hear the home note to tune against.</dd>
+      <dt>Raga, thaat</dt><dd>A <i>raga</i> is a melodic framework: which notes, how you move between them, and characteristic phrases. A <i>thaat</i> is a parent scale ragas are grouped under (Bilawal ≈ major scale).</dd>
+      <dt>Aroha / avaroha</dt><dd>The ascending / descending form of a scale or raga.</dd>
+      <dt>Alankar</dt><dd>Practice patterns over a scale (e.g. S R G, R G M, …), like scale sequences in Western training.</dd>
+      <dt>Meend</dt><dd>A smooth slide from one note to another, through everything in between.</dd>
+      <dt>Kan swar</dt><dd>A grace note: a split-second touch of another note before the main one.</dd>
+      <dt>Gamak (gamaka)</dt><dd>A controlled oscillation or shake between notes. In Carnatic music, gamakas are central to each raga's identity.</dd>
+      <dt>Murki</dt><dd>A quick, delicate turn of 3–4 notes, like a mini-run.</dd>
+      <dt>Andolan</dt><dd>A slow, gentle swing on a note.</dd>
+      <dt>Taan</dt><dd>A fast run of notes, the Indian cousin of a vocal riff.</dd>
+      <dt>Shruti</dt><dd>Fine pitch positions (microtones) within the octave. Also used to mean the chosen tonic pitch.</dd>
+      <dt>Riyaz</dt><dd>Daily practice.</dd>
+      <dt>Kattai / kali–safed</dt><dd>Ways of naming which key your Sa is in (Carnatic pitch-pipe numbers; Hindustani harmonium black/white keys).</dd>
+    </dl>
+
+    <h2>Note Pad notation</h2>
     <table class="tbl">
       <tr><th>Symbol</th><th>Meaning</th></tr>
-      <tr><td><code>S R G m P D N</code></td><td>Shuddha swaras. Lowercase <code>r g d n</code> = komal, <code>M</code> = tivra Ma</td></tr>
-      <tr><td><code>N.</code> / dot below</td><td>Lower octave (mandra saptak)</td></tr>
-      <tr><td><code>S'</code> / dot above</td><td>Upper octave (taar saptak)</td></tr>
+      <tr><td><code>1 2 3 4 5 6 7 8</code></td><td>Scale degrees of the key (1 = key note, 8 = octave). <code>b3</code> = minor 3rd, <code>#4</code> = raised 4th</td></tr>
+      <tr><td><code>S R G m P D N</code></td><td>The same in Indian sargam. Lowercase <code>r g d n</code> = komal, <code>M</code> = tivra Ma</td></tr>
+      <tr><td><code>.5</code> / <code>5.</code> &nbsp; <code>1'</code></td><td>Lower octave · upper octave</td></tr>
       <tr><td><code>-</code> &nbsp; <code>_</code></td><td>Hold one more beat · rest</td></tr>
-      <tr><td><code>S~G</code></td><td>Meend (glide) from S to G</td></tr>
-      <tr><td><code>(N)S</code></td><td>Kan swar: grace note N touched before S</td></tr>
-      <tr><td><code>G*</code> &nbsp; <code>g^</code></td><td>Gamak (oscillation) · andolan (slow swing)</td></tr>
-      <tr><td><code>[S R G m]</code></td><td>Several notes in one beat (fast passages)</td></tr>
+      <tr><td><code>1~5</code></td><td>Slide (meend) from 1 to 5</td></tr>
+      <tr><td><code>(2)1</code></td><td>Grace note (kan): touch 2, then land on 1</td></tr>
+      <tr><td><code>3*</code> &nbsp; <code>5%</code> &nbsp; <code>3^</code></td><td>Trill/shake (gamak) · vibrato · slow swing (andolan)</td></tr>
+      <tr><td><code>[5 4 3 1]</code></td><td>Several notes in one beat (runs, taans)</td></tr>
     </table>
-    <p class="muted small">Carnatic names (R1/R2, G2/G3, …) and Western note names can be chosen in Settings.</p>
+    <p class="muted small">Switch between general note names and Indian sargam (Hindustani or Carnatic) in Settings → Music style.</p>
 
     <h2>About this app</h2>
-    <p class="small">Everything runs in your browser: pitch detection (YIN), melody extraction from full song mixes (harmonic-summation salience with Viterbi tracking, in the spirit of Salamon &amp; Gómez's Melodia), tanpura synthesis, and storage. Nothing you sing or record is uploaded. Melody extraction from a mix with instruments isn't perfect: if a flute or violin line gets picked up, use "Fix the melody guide" in Song Studio. Chrome or Edge on desktop recommended (needed for tab-audio capture).</p>
+    <p class="small">Everything runs in your browser: pitch detection (YIN), melody extraction from full song mixes (harmonic-summation salience with Viterbi tracking, in the spirit of Salamon &amp; Gómez's Melodia), drone synthesis, and storage. Nothing you sing or record is uploaded. Melody extraction from a mix with instruments isn't perfect: if a guitar solo, flute or violin line gets picked up, use "Fix the melody guide" in Song Studio. Chrome or Edge on desktop recommended (needed for tab-audio capture).</p>
   </section>
 </main>
 <script type="module" src="js/app.js"></script>

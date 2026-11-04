@@ -2,8 +2,8 @@
 import { audioCtx, mic } from './audio.js';
 import { tanpura } from './sound.js';
 import { settings, saveSettings, onSettings, progress, streak, minutesOn, dayKey, resetProgress, songs, lastSong, getSong } from './store.js';
-import { saHzFrom, westernName, hzToMidi, kattaiName, kaliSafedName, SWARA_LONG, SWARA_SHORT, THAATS } from './music.js';
-import { EXERCISES, WARMUP_ROUTINE } from './exercises.js';
+import { saHzFrom, westernName, hzToMidi, kattaiName, kaliSafedName, SWARA_LONG, SWARA_SHORT, DEGREE_LONG, scaleList, scaleLabel, isIndian, term } from './music.js';
+import { EXERCISES, WARMUP_ROUTINE, exText } from './exercises.js';
 import { ExercisePlayer } from './practice.js';
 import { SongStudio } from './song.js';
 import { RangeFinder } from './range.js';
@@ -17,12 +17,17 @@ let current = null;
 // Header
 function renderHeader() {
   const sa = saHzFrom(settings), m = hzToMidi(sa);
-  $('#saChip').textContent = `Sa ${westernName(Math.round(m))}`;
-  $('#saChip').title = `Your Sa: ${westernName(Math.round(m))} (${sa.toFixed(1)} Hz) · ${kattaiName(Math.round(m) % 12)} · ${kaliSafedName(Math.round(m) % 12)}. Click to change.`;
+  const ind = isIndian(settings), n = westernName(Math.round(m));
+  $('#saChip').textContent = `${ind ? 'Sa' : 'Key'} ${n}`;
+  $('#saChip').title = ind ? `Your Sa: ${n} (${sa.toFixed(1)} Hz) · ${kattaiName(Math.round(m) % 12)} · ${kaliSafedName(Math.round(m) % 12)}. Click to change.`
+    : `Key note for exercises: ${n} (${sa.toFixed(1)} Hz). Click to change.`;
+  $('#tanpuraBtn').textContent = tanpura.kind() === 'tanpura' ? '🪕 Tanpura' : '◎ Drone';
+  $('#tanpuraBtn').title = 'Drone on your key note: a steady reference pitch to sing against';
   $('#tanpuraBtn').classList.toggle('on', tanpura.on);
   $('#micBtn').classList.toggle('on', mic.running);
 }
 function setupHeader() {
+  tanpura.kindFn = () => (settings.droneSound === 'auto' || !settings.droneSound ? (isIndian(settings) ? 'tanpura' : 'pad') : settings.droneSound);
   $('#tanpuraBtn').addEventListener('click', () => {
     audioCtx();
     if (tanpura.on) tanpura.stop();
@@ -45,7 +50,16 @@ function setupHeader() {
   tick();
   onSettings((s, patch) => {
     renderHeader();
-    if (('saMidi' in patch || 'saFine' in patch || 'tanpuraFirst' in patch) && tanpura.on && current !== 'song') tanpura.start(saHzFrom(settings), settings.tanpuraFirst);
+    if (('saMidi' in patch || 'saFine' in patch || 'tanpuraFirst' in patch || 'droneSound' in patch || 'notation' in patch) && tanpura.on) {
+      tanpura.start(current === 'song' && pages.song && pages.song.song ? pages.song.practiceSa : saHzFrom(settings), settings.tanpuraFirst);
+    }
+    if ('notation' in patch || 'tuning' in patch) {
+      // rebuild style-dependent pages next time they're opened
+      if (pages.warm) { pages.warm.player.stop(); pages.warm = null; }
+      if (pages.drills) { pages.drills.player.stop(); pages.drills = null; }
+      if (pages.range) pages.range = null;
+      if (pages.song && pages.song.song) { pages.song.refreshKey(); pages.song.renderPhrases(); }
+    }
     if ('tanpuraVol' in patch) tanpura.setVolume(settings.tanpuraVol);
     if ('micSens' in patch) mic.setSensitivity(settings.micSens);
   });
@@ -53,12 +67,12 @@ function setupHeader() {
 
 // ---------------------------------------------------------------------------
 // Today
-const WEAK_TO_DRILL = { highFlat: 'fiveNote', wobble: 'saHold', ornaments: 'gamak', scoop: 'pitchMatch', accuracy: 'aroha', bias: 'saHold' };
+const WEAK_TO_DRILL = { highFlat: 'fiveNote', wobble: 'saHold', ornaments: 'meend', scoop: 'pitchMatch', accuracy: 'aroha', bias: 'saHold' };
 const WEAK_LABEL = { highFlat: 'flat high notes', wobble: 'unsteady held notes', ornaments: 'ornaments', scoop: 'scooping into notes', accuracy: 'overall accuracy', bias: 'pitch drift' };
 function focusDrill() {
   const w = Object.entries(progress.weak || {}).sort((a, b) => b[1] - a[1])[0];
   if (w && w[1] > 0.5) return { id: WEAK_TO_DRILL[w[0]], why: `your recent takes show ${WEAK_LABEL[w[0]]}` };
-  const rot = ['alankar3', 'meend', 'kan', 'intervals', 'gamak', 'alankar4'];
+  const rot = isIndian(settings) ? ['alankar3', 'meend', 'kan', 'intervals', 'gamak', 'runs', 'alankar4'] : ['alankar3', 'meend', 'vibrato', 'intervals', 'runs', 'flips', 'kan'];
   return { id: rot[new Date().getDate() % rot.length], why: null };
 }
 function doneToday(pred) { const d = dayKey(new Date()); return progress.log.some((r) => dayKey(r.date) === d && pred(r)); }
@@ -70,7 +84,7 @@ function renderToday() {
   const song = getSong(lastSong.get()) || songs[0];
   const fd = focusDrill();
   root.append(h('div', { class: 'hero' },
-    h('div', {}, h('h1', {}, 'Today\'s riyaz'), h('p', { class: 'muted' }, 'About 20 minutes. Short daily sessions beat long weekly ones, because spaced practice is how motor skills consolidate.')),
+    h('div', {}, h('h1', {}, 'Today\'s ' + term('practice', settings)), h('p', { class: 'muted' }, 'About 20 minutes. Short daily sessions beat long weekly ones, because spaced practice is how motor skills consolidate.')),
     h('div', { class: 'stats' },
       h('div', { class: 'stat' }, h('div', { class: 'stat-v' }, String(st)), h('div', { class: 'stat-l' }, 'day streak')),
       h('div', { class: 'stat' }, h('div', { class: 'stat-v' }, Math.round(today) + ' min'), h('div', { class: 'stat-l' }, 'today')),
@@ -78,13 +92,13 @@ function renderToday() {
   if (!settings.saChosen) root.append(h('div', { class: 'callout setup' },
     h('strong', {}, 'First-time setup (2 minutes)'),
     h('ol', {}, h('li', {}, 'Use ', h('strong', {}, 'wired headphones'), ' (Bluetooth adds delay, and speakers leak into the mic).'),
-      h('li', {}, 'Run the ', h('a', { href: '#range' }, 'range test'), '. It picks a Sa (tonic) that fits your voice. Every exercise is built on it.'),
+      h('li', {}, 'Run the ', h('a', { href: '#range' }, 'range test'), isIndian(settings) ? '. It picks a Sa (tonic) that fits your voice. Every exercise is built on it.' : '. It finds what\'s comfortable for your voice, picks a key for the exercises, and lets Song Studio suggest a key for each song.'),
       h('li', {}, 'Allow the microphone when the browser asks.')),
   ));
   const steps = [
-    { title: 'Warm-up', mins: 8, href: '#warmup', done: doneToday((r) => r.type === 'drill' && WARMUP_ROUTINE.includes(r.id)), what: 'Breath, Sa hold, lip-trill sirens, 5-note scale, aroha, meend, cool-down.' },
+    { title: 'Warm-up', mins: 8, href: '#warmup', done: doneToday((r) => r.type === 'drill' && WARMUP_ROUTINE.includes(r.id)), what: WARMUP_ROUTINE.map((id) => exText(EXERCISES[id], settings).name.split(':')[0]).join(', ') + '.' },
     { title: 'Ear ↔ voice: pitch-match', mins: 2, href: '#drills/pitchMatch', done: doneToday((r) => r.id === 'pitchMatch'), what: 'Hear a note, then sing it. Trains the ear-to-voice link that most "off-key" singing comes down to.' },
-    { title: 'Focus drill: ' + EXERCISES[fd.id].name, mins: 3, href: '#drills/' + fd.id, done: doneToday((r) => r.id === fd.id), what: fd.why ? 'Chosen because ' + fd.why + '.' : 'Today\'s technique focus (changes daily until your takes show a specific weakness).' },
+    { title: 'Focus drill: ' + exText(EXERCISES[fd.id], settings).name, mins: 3, href: '#drills/' + fd.id, done: doneToday((r) => r.id === fd.id), what: fd.why ? 'Chosen because ' + fd.why + '.' : 'Today\'s technique focus (changes daily until your takes show a specific weakness).' },
     { title: 'Song: ' + (song ? song.title : 'add a song'), mins: 10, href: '#song', done: doneToday((r) => r.type === 'song'), what: 'Loop 2–3 lines. Listen at 0.75× with the guide tone, then sing along, then try Song muted.' },
     { title: 'Cool-down', mins: 1, href: '#drills/cooldown', done: doneToday((r) => r.id === 'cooldown'), what: 'Soft descending hum.' },
   ];
@@ -98,7 +112,7 @@ function renderToday() {
     h('ol', { class: 'principles' },
       h('li', {}, h('strong', {}, 'Sing in your key. '), 'Most "can\'t reach that note" problems are key problems. Transpose the song until it fits, then expand your range with exercises.'),
       h('li', {}, h('strong', {}, 'Listen, then sing, then check. '), 'Hear the target, sing it, then compare (the pitch line, your recording). Feedback is what turns repetition into improvement.'),
-      h('li', {}, h('strong', {}, 'Slow and small. '), 'Loop one line at 0.6–0.75× until it\'s accurate, then speed up. Ornaments (gamaka, murki, kan) are learned slowly first.'),
+      h('li', {}, h('strong', {}, 'Slow and small. '), 'Loop one line at 0.6–0.75× until it\'s accurate, then speed up. Fast stuff (' + term('ornaments', settings) + ') is learned slowly first.'),
       h('li', {}, h('strong', {}, 'Wean off the screen. '), 'Use the live line to learn, then switch to "Song muted" and Blind mode so your ear does the work.'),
       h('li', {}, h('strong', {}, 'Record yourself. '), 'People judge their own singing poorly while singing. Listening back is one of the most effective tools.'),
       h('li', {}, h('strong', {}, 'No pain. '), 'Strain, hoarseness or pain means stop. Hoarseness lasting over 2 weeks needs an ENT doctor.')),
@@ -121,7 +135,7 @@ function renderWarmup() {
       [...list.children].forEach((li, k) => li.classList.toggle('cur', k === i));
       player.load(WARMUP_ROUTINE[i]);
     };
-    WARMUP_ROUTINE.forEach((id, i) => list.append(h('li', { onclick: () => go(i) }, EXERCISES[id].name, h('small', {}, ` ${EXERCISES[id].mins} min`))));
+    WARMUP_ROUTINE.forEach((id, i) => list.append(h('li', { onclick: () => go(i) }, exText(EXERCISES[id], settings).name, h('small', {}, ` ${EXERCISES[id].mins} min`))));
     player.onNext = () => { list.children[idx].classList.add('done'); if (idx + 1 < WARMUP_ROUTINE.length) go(idx + 1); else toast('Warm-up complete. Nice work. 🎉', 'good'); };
     player.onDone = () => list.children[idx].classList.add('done');
     pages.warm = { player, go };
@@ -137,10 +151,10 @@ function renderDrills(sub) {
     root.innerHTML = '';
     const grid = h('div', { class: 'drill-grid' });
     const host = h('div', { class: 'drill-host' });
-    root.append(h('h2', {}, 'Drills'), h('p', { class: 'muted' }, 'Pick one. Each one gives feedback per note. Scale-based drills follow the scale (thaat) you choose.'), grid, host);
+    root.append(h('h2', {}, 'Drills'), h('p', { class: 'muted' }, 'Pick one. Each one gives feedback per note. Scale-based drills follow the scale you choose.'), grid, host);
     const ids = Object.keys(EXERCISES).concat(['custom']);
     for (const id of ids) {
-      const d = id === 'custom' ? { name: 'Swara Pad: type your own line', what: 'Practise any sargam phrase, such as a hard line from your song.' } : EXERCISES[id];
+      const d = id === 'custom' ? { name: 'Note Pad: practise your own line', what: 'Type any line of notes, such as a hard phrase from your song, and drill it.' } : exText(EXERCISES[id], settings);
       grid.append(h('a', { class: 'drill-card', href: '#drills/' + id }, h('strong', {}, d.name), h('small', {}, d.what.split('. ')[0].replace(/\.$/, '') + '.')));
     }
     const player = new ExercisePlayer(host);
@@ -162,7 +176,7 @@ function renderProgress() {
   const root = $('#page-progress'); root.innerHTML = '';
   const log = progress.log;
   root.append(h('h2', {}, 'Progress'));
-  if (!log.length) { root.append(h('p', { class: 'muted' }, 'Nothing yet. Your practice minutes, scores and per-swara tendencies appear here as you practise.')); return; }
+  if (!log.length) { root.append(h('p', { class: 'muted' }, 'Nothing yet. Your practice minutes, scores and note-by-note tuning tendencies appear here as you practise.')); return; }
   // 28-day minutes
   const days = [];
   for (let i = 27; i >= 0; i--) { const d = new Date(); d.setDate(d.getDate() - i); days.push({ d, m: minutesOn(dayKey(d)) }); }
@@ -193,12 +207,12 @@ function renderProgress() {
   if (rows.length) {
     const lim = Math.max(30, ...rows.map((r) => Math.abs(r.b)));
     root.append(h('div', { class: 'card' },
-      h('h3', {}, 'Microtone map: where each swara lands for you'),
+      h('h3', {}, isIndian(settings) ? 'Microtone map: where each swara lands for you' : 'Tuning map: where each scale degree lands for you'),
       h('p', { class: 'small muted' }, 'Average offset on held notes (recent sessions weigh more). Left = flat, right = sharp. Within ±15¢ is very good.'),
       h('div', { class: 'diverge' }, ...rows.map((r) => {
         const w = (Math.abs(r.b) / lim) * 50;
-        return h('div', { class: 'drow', title: `${SWARA_LONG[r.i]}: ${r.b > 0 ? '+' : ''}${Math.round(r.b)}¢ over ${Math.round(r.n)} samples` },
-          h('span', { class: 'dlab' }, SWARA_SHORT[r.i] + ' · ' + SWARA_LONG[r.i]),
+        return h('div', { class: 'drow', title: `${isIndian(settings) ? SWARA_LONG[r.i] : DEGREE_LONG[r.i]}: ${r.b > 0 ? '+' : ''}${Math.round(r.b)}¢ over ${Math.round(r.n)} samples` },
+          h('span', { class: 'dlab' }, isIndian(settings) ? SWARA_SHORT[r.i] + ' · ' + SWARA_LONG[r.i] : DEGREE_LONG[r.i]),
           h('span', { class: 'dtrack' }, h('span', { class: 'dzero' }), h('span', { class: 'dbar ' + (r.b < 0 ? 'flat' : 'sharp'), style: r.b < 0 ? `right:50%;width:${w}%` : `left:50%;width:${w}%` })),
           h('span', { class: 'dval mono' }, (r.b > 0 ? '+' : '') + Math.round(r.b) + '¢'));
       })),
@@ -219,7 +233,7 @@ function renderSettings() {
   const field = (label, ctl, help) => h('label', { class: 'field' }, h('span', { class: 'flabel' }, label), ctl, help ? h('small', { class: 'muted' }, help) : null);
   const notes = []; for (let m = 36; m <= 72; m++) notes.push(m);
   const saSel = h('select', { onchange: (e) => saveSettings({ saMidi: +e.target.value, saChosen: true }) },
-    ...notes.map((m) => h('option', { value: m, selected: m === settings.saMidi }, `${westernName(m)} · ${kattaiName(m % 12)} · ${kaliSafedName(m % 12)}`)));
+    ...notes.map((m) => h('option', { value: m, selected: m === settings.saMidi }, isIndian(settings) ? `${westernName(m)} · ${kattaiName(m % 12)} · ${kaliSafedName(m % 12)}` : westernName(m))));
   const fineOut = h('span', { class: 'mono' }, settings.saFine + '¢');
   const fine = h('input', { type: 'range', min: -50, max: 50, step: 1, value: settings.saFine, oninput: (e) => { fineOut.textContent = e.target.value + '¢'; }, onchange: (e) => saveSettings({ saFine: +e.target.value }) });
   const sel = (key, opts) => h('select', { onchange: (e) => saveSettings({ [key]: isNaN(+e.target.value) ? e.target.value : +e.target.value }) }, ...opts.map(([v, l]) => h('option', { value: v, selected: settings[key] == v }, l)));
@@ -228,19 +242,27 @@ function renderSettings() {
     return h('span', { class: 'row' }, h('input', { type: 'range', min, max, step, value: settings[key], oninput: (e) => (out.textContent = fmt(+e.target.value)), onchange: (e) => saveSettings({ [key]: +e.target.value }) }), out);
   };
   const chk = (key) => h('input', { type: 'checkbox', checked: !!settings[key], onchange: (e) => saveSettings({ [key]: e.target.checked }) });
+  const ind = isIndian(settings);
+  const styleSel = h('select', { onchange: (e) => { saveSettings({ notation: e.target.value }); renderSettings(); } },
+    ...[['western', 'General: any song (note names C D E, scale degrees 1–7)'], ['hindustani', 'Indian, Hindustani sargam (S R G m P D N)'], ['carnatic', 'Indian, Carnatic (S R1 R2 G2 G3 M1 …)']]
+      .map(([v, l]) => h('option', { value: v, selected: settings.notation === v }, l)));
   root.append(h('h2', {}, 'Settings'),
     h('div', { class: 'card form' },
-      h('h3', {}, 'Your tonic'),
-      field('Sa', saSel, 'Run the range test for a suggestion. Typical: men C#3–E3 (1½–3 kattai), women G#3–C4 (5½ kattai and up).'),
-      field('Fine tune', h('span', { class: 'row' }, fine, fineOut), 'For matching a harmonium or shruti box that\'s slightly off.'),
-      field('Drone', sel('tanpuraFirst', [['P', 'Pa – Sa Sa Sa (most ragas)'], ['M', 'Ma – Sa Sa Sa (ragas without Pa)'], ['N', 'Ni – Sa Sa Sa'], ['S', 'Sa – Sa Sa Sa']])),
+      h('h3', {}, 'Music style'),
+      field('Style', styleSel, 'Changes note names, scales, drone and exercise wording. Any song works in either style; pick whichever way of naming notes you think in.'),
+    ),
+    h('div', { class: 'card form' },
+      h('h3', {}, ind ? 'Your tonic (Sa)' : 'Exercise key'),
+      field(ind ? 'Sa' : 'Key note', saSel, ind ? 'Run the range test for a suggestion. Typical: men C#3–E3 (1½–3 kattai), women G#3–C4 (5½ kattai and up).' : 'The note warm-ups and drills are built on. Run the range test for a suggestion.'),
+      field('Fine tune', h('span', { class: 'row' }, fine, fineOut), ind ? 'For matching a harmonium or shruti box that\'s slightly off.' : 'For matching an instrument that\'s slightly off A=440.'),
+      field('Drone sound', sel('droneSound', [['auto', ind ? 'Automatic (tanpura)' : 'Automatic (soft pad)'], ['pad', 'Soft pad (root + fifth)'], ['tanpura', 'Tanpura']])),
+      tanpura.kind() === 'tanpura' ? field('Tanpura tuning', sel('tanpuraFirst', [['P', 'Pa – Sa Sa Sa (most ragas)'], ['M', 'Ma – Sa Sa Sa (ragas without Pa)'], ['N', 'Ni – Sa Sa Sa'], ['S', 'Sa – Sa Sa Sa']])) : null,
       field('Drone volume', range('tanpuraVol', 0, 1, 0.05, (v) => Math.round(v * 100) + '%')),
     ),
     h('div', { class: 'card form' },
-      h('h3', {}, 'Notation & tuning'),
-      field('Note names', sel('notation', [['hindustani', 'Hindustani (S r R g G m M P d D n N)'], ['carnatic', 'Carnatic (S R1 R2 G2 G3 M1 M2 P D1 D2 N2 N3)'], ['western', 'Western (C D E…)']])),
-      field('Swara positions', sel('tuning', [['et', 'Equal temperament (keyboard)'], ['just', 'Just intonation (tanpura-natural, e.g. Ga at 386¢)']]), 'Indian singing against a tanpura tends towards just intervals. Ga and Ni sit slightly lower than on a keyboard.'),
-      field('Default scale (thaat)', sel('thaat', Object.keys(THAATS).map((k) => [k, `${k} / ${THAATS[k].carnatic}: ${THAATS[k].hint}`]))),
+      h('h3', {}, 'Tuning & scales'),
+      field('Note positions', sel('tuning', [['et', 'Equal temperament (piano / most recordings)'], ['just', 'Just intonation (drone-natural, e.g. major 3rd at 386¢)']]), 'Singing against a drone pulls you towards just intervals: major 3rds and 7ths sit slightly lower than on a piano. Indian classical music uses them; most pop and rock recordings are equal-tempered.'),
+      field('Default scale', sel('scale', scaleList(settings).map((k) => [k, scaleLabel(k, settings)]))),
     ),
     h('div', { class: 'card form' },
       h('h3', {}, 'Feedback'),

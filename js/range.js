@@ -1,7 +1,7 @@
 // Vocal range finder: only counts notes held steadily for ~1 s.
 import { mic } from './audio.js';
 import { settings, saveSettings, logActivity } from './store.js';
-import { westernName, hzToMidi, kattaiName, kaliSafedName, median, midiToHz } from './music.js';
+import { westernName, hzToMidi, kattaiName, kaliSafedName, median, midiToHz, isIndian } from './music.js';
 import { h, ensureMic, toast } from './ui.js';
 
 const VOICE_TYPES = [
@@ -22,7 +22,7 @@ export class RangeFinder {
     this.btnHigh = h('button', { class: 'btn primary', onclick: () => this.run('high') }, '2 · Find my highest note');
     r.append(
       h('div', { class: 'card' },
-        h('h2', {}, 'Find your range and your Sa'),
+        h('h2', {}, isIndian(settings) ? 'Find your range and your Sa' : 'Find your vocal range'),
         h('p', {}, 'Sing on a relaxed "aa" or hum. ', h('strong', {}, 'Slide slowly'), ' towards your lowest (then highest) note and ', h('strong', {}, 'hold it for a second'), '. Only notes you can hold steadily count. That keeps out croaks and squeaks, and it\'s the range you can actually use in songs. Stop before any strain.'),
         h('div', { class: 'row wrap' }, this.btnLow, this.btnHigh, h('button', { class: 'btn', onclick: () => this.stop() }, 'Stop')),
         this.live, this.kb, this.out,
@@ -108,9 +108,9 @@ export class RangeFinder {
         h('div', { class: 'stat' }, h('div', { class: 'stat-v' }, vt), h('div', { class: 'stat-l' }, 'rough voice type')),
       ),
       h('div', { class: 'callout' },
-        h('strong', {}, `Suggested Sa: ${westernName(sa)} (${kattaiName(sa % 12)} · ${kaliSafedName(sa % 12)})`),
-        h('p', {}, 'Your lowest comfortable note becomes mandra Pa, which leaves room above for the taar saptak (upper octave). Beginners usually have 1–1.5 octaves; regular practice typically adds a few semitones over months.'),
-        h('div', { class: 'row' }, h('button', { class: 'btn primary', onclick: () => { saveSettings({ saMidi: sa, saFine: 0, saChosen: true }); toast(`Sa set to ${westernName(sa)}.`, 'good'); } }, `Use ${westernName(sa)} as my Sa`)),
+        h('strong', {}, isIndian(settings) ? `Suggested Sa: ${westernName(sa)} (${kattaiName(sa % 12)} · ${kaliSafedName(sa % 12)})` : `Suggested key note for exercises: ${westernName(sa)}`),
+        h('p', {}, (isIndian(settings) ? 'Your lowest comfortable note becomes mandra Pa, which leaves room above for the taar saptak (upper octave). ' : 'This puts your lowest comfortable note a fifth below the key note, leaving room above for an octave or more. Songs are matched to your range separately in Song Studio. ') + 'Beginners usually have 1–1.5 octaves; regular practice typically adds a few semitones over months.'),
+        h('div', { class: 'row' }, h('button', { class: 'btn primary', onclick: () => { saveSettings({ saMidi: sa, saFine: 0, saChosen: true }); toast(`${isIndian(settings) ? 'Sa' : 'Key note'} set to ${westernName(sa)}.`, 'good'); } }, `Use ${westernName(sa)}${isIndian(settings) ? ' as my Sa' : ' for exercises'}`)),
         span < 12 ? h('p', { class: 'small muted' }, 'Range under an octave usually just means a cautious first try. Repeat after warming up.') : null,
       ),
       h('p', { class: 'small muted' }, 'Voice type here is only a rough guess from range. Real classification also depends on timbre and where your voice feels easy.'),

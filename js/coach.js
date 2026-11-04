@@ -1,5 +1,6 @@
 // Feedback: score a take against a reference contour, diagnose patterns, suggest fixes.
-import { nearestSwara, wrapCents, median, percentile, SWARA_LONG, swaraLabel, swaraCents } from './music.js';
+import { nearestSwara, wrapCents, median, percentile, SWARA_LONG, swaraLabel, swaraCents, noteText, degreeText, isIndian } from './music.js';
+import { settings } from './store.js';
 
 // Resample user frames [{t, c}] onto a 10 ms grid over [a, b].
 function grid(frames, a, b, hop = 0.01) {
@@ -162,13 +163,13 @@ function tipsFor(r, { tol, rangeHi }) {
   if (rangeHi != null && r.refHi != null && r.refHi > rangeHi + 50) tips.push({ title: 'This line goes above your comfortable top', level: 'high',
     detail: 'The reference peaks above the highest comfortable note from your range test. Pushing up there is how voices get strained. Use transpose, or sing those notes an octave lower for now.' });
   if (r.loBias != null && r.loBias > 30) tips.push({ title: `Low notes drift sharp (${c(r.loBias)})`, level: 'mid',
-    detail: 'Low notes need a relaxed, open throat. Let the larynx sit low, sing softer, and don\'t press. Practising Sa sadhana in the lower octave (mandra) helps.' , drill: 'saHold' });
+    detail: 'Low notes need a relaxed, open throat. Let the larynx sit low, sing softer, and don\'t press. Long tones in your lower range help.', drill: 'saHold' });
   if (Math.abs(r.bias) > 20 && !(r.hiBias != null && r.hiBias < -25 && r.bias < 0)) tips.push({ title: r.bias < 0 ? `Overall slightly flat (${c(r.bias)})` : `Overall slightly sharp (${c(r.bias)})`, level: 'mid', drill: 'saHold',
-    detail: r.bias < 0 ? 'Across the line you sit a little under the pitch. Keep the tanpura on and listen for Sa. Flatness often comes from low energy or a tired voice, so give the line a little more breath and a brighter vowel ("aa" towards "eh").' : 'You tend to overshoot. This is usually tension or pushing. Sing a little softer and keep the shoulders and jaw relaxed.' });
+    detail: r.bias < 0 ? 'Across the line you sit a little under the pitch. Keep the drone on and listen for the key note. Flatness often comes from low energy or a tired voice, so give the line a little more breath and a brighter vowel ("aa" towards "eh").' : 'You tend to overshoot. This is usually tension or pushing. Sing a little softer and keep the shoulders and jaw relaxed.' });
   if (r.wobble != null && r.wobble > 22) tips.push({ title: 'Held notes are unsteady', level: 'mid', drill: 'saHold',
-    detail: `Your pitch wavers by about ±${Math.round(r.wobble)}¢ on notes that should be steady. Practise holding single notes over the tanpura (Sa sadhana) with a slow, steady exhale. Steadiness comes from breath control, not from the throat.` });
+    detail: `Your pitch wavers by about ±${Math.round(r.wobble)}¢ on notes that should be steady. Practise long tones over the drone with a slow, steady exhale. Steadiness comes from breath control, not from the throat.` });
   if (r.ornRatio != null && r.ornRatio < 0.5) tips.push({ title: 'Ornaments are coming out straight', level: 'mid', drill: 'gamak',
-    detail: 'Where the original has gamakas, kan swaras or murkis, your line is much flatter (you move about ' + Math.round(r.ornRatio * 100) + '% as much). Slow the song to 0.5–0.6×, watch the shape of the curve, and copy the movement on "aa" before adding words.' });
+    detail: 'Where the original has ' + (isIndian(settings) ? 'gamakas, kan swaras or murkis' : 'runs, slides, flips or vibrato') + ', your line is much flatter (you move about ' + Math.round(r.ornRatio * 100) + '% as much). Slow the song to 0.5–0.6×, watch the shape of the curve, and copy the movement on "aa" before adding words.' });
   if (r.ornRatio != null && r.ornRatio > 1.8) tips.push({ title: 'Extra movement where the melody is simple', level: 'low',
     detail: 'You are adding wobble or slides where the original is clean. Aim to land straight on each note.' });
   if (r.scoop > 0.35) tips.push({ title: 'Scooping into notes', level: 'mid', drill: 'pitchMatch',
@@ -183,7 +184,7 @@ function tipsFor(r, { tol, rangeHi }) {
 
 // ---------------------------------------------------------------------------
 // Transcription: approximate sargam of a melody stretch (cents rel Sa via relAt).
-export function transcribe(relAt, start, end, { tuning = 'et', notation = 'hindustani' } = {}) {
+export function transcribe(relAt, start, end, { tuning = 'et', notation = 'hindustani', saHz = 138.59 } = {}) {
   const hop = 0.01;
   const raw = [];
   for (let t = start; t < end; t += hop) raw.push(relAt(t));
@@ -213,7 +214,7 @@ export function transcribe(relAt, start, end, { tuning = 'et', notation = 'hindu
   if (cur) notes.push(cur);
   // turn into tokens: long notes, short ones become kan / gamak / murki
   const toks = [];
-  const lab = (n) => swaraLabel(n.idx, n.oct, notation === 'western' ? 'hindustani' : notation);
+  const lab = (n) => noteText(n.idx, n.oct, saHz, { notation });
   let pendingKan = null, glideFrom = null;
   const pushLong = (n, text) => {
     if (glideFrom) { // meend landing: join onto the token we glided from
@@ -297,5 +298,5 @@ export function fitToRange(p5Hz, p95Hz, lowMidi, highMidi) {
 }
 
 export function describeSwaraBias(list, notation) {
-  return list.map((x) => `${SWARA_LONG[x.idx]} ${x.bias > 0 ? 'sharp' : 'flat'} by ${Math.round(Math.abs(x.bias))}¢`).join(' · ');
+  return list.map((x) => `${degreeText(x.idx, settings)} ${x.bias > 0 ? 'sharp' : 'flat'} by ${Math.round(Math.abs(x.bias))}¢`).join(' · ');
 }
