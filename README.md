@@ -4,6 +4,8 @@ A free, browser-only singing coach for any style: pop, rock, soul, musical theat
 
 **Open the app:** https://kirubes27.github.io/swara-lab/ (Chrome or Edge on desktop recommended; wired headphones)
 
+It's an installable web app: use *Install* in Chrome/Edge (desktop or Android), or *Share → Add to Home Screen* on iPhone. It works offline after the first visit. It's free, with no accounts: everyone's songs, recordings and progress stay on their own device.
+
 ## What's inside
 
 | Page | What it does |

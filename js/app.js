@@ -90,7 +90,11 @@ function renderToday() {
       h('div', { class: 'stat' }, h('div', { class: 'stat-v' }, Math.round(today) + ' min'), h('div', { class: 'stat-l' }, 'today')),
       h('div', { class: 'stat' }, h('div', { class: 'stat-v' }, Math.round(week) + ' min'), h('div', { class: 'stat-l' }, 'last 7 days')))));
   if (!settings.saChosen) root.append(h('div', { class: 'callout setup' },
-    h('strong', {}, 'First-time setup (2 minutes)'),
+    h('strong', {}, 'Welcome! First-time setup (2 minutes)'),
+    h('p', { class: 'small' }, 'What do you mostly want to sing? (You can change this any time in Settings.)'),
+    h('div', { class: 'style-pick' },
+      h('button', { class: 'btn' + (!isIndian(settings) ? ' on' : ''), onclick: () => { saveSettings({ notation: 'western' }); renderToday(); } }, 'Any song', h('small', {}, 'Pop, rock, soul, film, musicals… Notes named C D E.')),
+      h('button', { class: 'btn' + (isIndian(settings) ? ' on' : ''), onclick: () => { saveSettings({ notation: 'hindustani' }); renderToday(); } }, 'Indian classical / film', h('small', {}, 'Sargam (Sa Re Ga), tanpura, ragas, gamakas.'))),
     h('ol', {}, h('li', {}, 'Use ', h('strong', {}, 'wired headphones'), ' (Bluetooth adds delay, and speakers leak into the mic).'),
       h('li', {}, 'Run the ', h('a', { href: '#range' }, 'range test'), isIndian(settings) ? '. It picks a Sa (tonic) that fits your voice. Every exercise is built on it.' : '. It finds what\'s comfortable for your voice, picks a key for the exercises, and lets Song Studio suggest a key for each song.'),
       h('li', {}, 'Allow the microphone when the browser asks.')),
@@ -117,6 +121,51 @@ function renderToday() {
       h('li', {}, h('strong', {}, 'Record yourself. '), 'People judge their own singing poorly while singing. Listening back is one of the most effective tools.'),
       h('li', {}, h('strong', {}, 'No pain. '), 'Strain, hoarseness or pain means stop. Hoarseness lasting over 2 weeks needs an ENT doctor.')),
     h('a', { href: '#learn' }, 'The research behind this, and fixes for common problems →')));
+  root.append(appCard());
+}
+
+// ---------------------------------------------------------------------------
+// Installable app (PWA) + sharing
+const APP_URL = 'https://kirubes27.github.io/swara-lab/';
+let deferredInstall = null;
+const isStandalone = () => matchMedia('(display-mode: standalone)').matches || navigator.standalone === true;
+const isIOS = () => /iPad|iPhone|iPod/.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+async function shareApp() {
+  const data = { title: 'Swara Lab', text: 'A free singing trainer: sing any song and see exactly where your notes go off.', url: APP_URL };
+  try {
+    if (navigator.share) await navigator.share(data);
+    else { await navigator.clipboard.writeText(APP_URL); toast('Link copied: ' + APP_URL, 'good'); }
+  } catch {}
+}
+function appCard() {
+  const how = isStandalone() ? 'You\'re using the installed app. 👍'
+    : deferredInstall ? 'Install it to get an icon on your home screen or desktop. It opens like a normal app and works offline.'
+    : isIOS() ? 'On iPhone/iPad: tap the Share button in Safari, then "Add to Home Screen".'
+    : 'In Chrome or Edge: click the install icon in the address bar (or menu → "Install Swara Lab"). On Android: menu → "Add to Home screen".';
+  return h('div', { class: 'card app-card' },
+    h('img', { src: 'icons/icon-192.png', alt: '' }),
+    h('div', { class: 'grow' }, h('strong', {}, 'Get the app, share it with friends'), h('p', { class: 'small muted', style: 'margin:0' }, how, ' Free, no account. Everyone\'s songs and progress stay on their own device.')),
+    h('div', { class: 'row wrap' },
+      deferredInstall && !isStandalone() ? h('button', { class: 'btn primary', onclick: installApp }, '⬇ Install') : null,
+      h('button', { class: 'btn', onclick: shareApp }, '↗ Share')));
+}
+async function installApp() {
+  if (!deferredInstall) return;
+  deferredInstall.prompt();
+  try { await deferredInstall.userChoice; } catch {}
+  deferredInstall = null;
+  $('#installBtn').hidden = true;
+  if (current === 'today') renderToday();
+}
+function setupPWA() {
+  if ('serviceWorker' in navigator && window.isSecureContext) navigator.serviceWorker.register('sw.js').catch(() => {});
+  window.addEventListener('beforeinstallprompt', (e) => {
+    e.preventDefault(); deferredInstall = e;
+    $('#installBtn').hidden = false;
+    if (current === 'today') renderToday();
+  });
+  window.addEventListener('appinstalled', () => { deferredInstall = null; $('#installBtn').hidden = true; toast('Installed! Open Swara Lab from your home screen or apps list.', 'good'); });
+  $('#installBtn').addEventListener('click', installApp);
 }
 
 // ---------------------------------------------------------------------------
@@ -310,6 +359,7 @@ function route() {
 }
 
 setupHeader();
+setupPWA();
 renderHeader();
 window.swaraLab = { pages }; // handy for debugging from the console
 window.addEventListener('hashchange', route);
