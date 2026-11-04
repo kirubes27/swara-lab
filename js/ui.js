@@ -33,7 +33,7 @@ export async function ensureMic() {
     document.dispatchEvent(new CustomEvent('mic-change'));
     return true;
   } catch (e) {
-    toast(e.name === 'NotAllowedError' ? 'Microphone access was blocked. Allow it from the address bar (🔒 icon) and try again.' : 'Could not start the microphone: ' + e.message, 'bad', 7000);
+    toast(e.name === 'NotAllowedError' ? 'Microphone access was blocked. Allow it from the site settings next to the address bar, then try again.' : 'Could not start the microphone: ' + e.message, 'bad', 7000);
     return false;
   }
 }
@@ -42,7 +42,7 @@ export function tipList(tips) {
   const ul = h('ul', { class: 'tips' });
   for (const t of tips) {
     const li = h('li', { class: 'tip ' + (t.level || 'info') }, h('strong', {}, t.title), h('p', {}, t.detail));
-    if (t.drill) li.append(h('a', { class: 'tip-link', href: '#drills/' + t.drill }, 'Open drill →'));
+    if (t.drill) li.append(h('a', { class: 'tip-link', href: '#practice/' + t.drill }, 'Open the drill'));
     ul.append(li);
   }
   return ul;

@@ -8,6 +8,7 @@ import { analyzeTake, swaraBiasText, describeSwaraBias } from './coach.js';
 import { SCALES, scaleList, scaleLabel, saHzFrom, nearestSwara, swaraLabel, noteText, isIndian, term, wrapCents, westernName, hzToMidi, median, clamp } from './music.js';
 import { settings, logActivity } from './store.js';
 import { h, toast, ensureMic, tipList } from './ui.js';
+import { icon } from './icons.js';
 
 // ---------------------------------------------------------------------------
 export class LiveReadout {
@@ -97,7 +98,7 @@ export class ExercisePlayer {
     this.result.innerHTML = '';
     this.controls.innerHTML = '';
     if (def.kind === 'breath') return this.loadBreath();
-    this.startBtn = h('button', { class: 'btn primary', onclick: () => (this.running ? this.stop() : this.start()) }, '▶ Start');
+    this.startBtn = h('button', { class: 'btn primary big', onclick: () => (this.running ? this.stop() : this.start()) }, icon('play', 16), 'Start');
     const echo = h('input', { type: 'checkbox', checked: this.echo, onchange: (e) => (this.echo = e.target.checked) });
     const bpmOut = h('span', { class: 'mono' }, String(this.bpm));
     const tempo = h('input', { type: 'range', min: 30, max: 160, step: 2, value: this.bpm, oninput: (e) => { this.bpm = +e.target.value; bpmOut.textContent = this.bpm; } });
@@ -194,7 +195,7 @@ export class ExercisePlayer {
       this.frames.push({ t, c: f.hz > 0 ? centsOf(f.hz, sa) : NaN });
     });
     this.running = true;
-    this.startBtn.textContent = '■ Stop';
+    this.startBtn.replaceChildren(icon('stop', 14), 'Stop');
     this.startBtn.classList.remove('primary');
     this.hideFrom = this.blind ? 0 : Infinity;
     const loop = () => {
@@ -202,7 +203,7 @@ export class ExercisePlayer {
       const t = c.currentTime - this.T0;
       this.lane.now = t;
       const seg = this.plan.segments.find((s) => t >= s.start - 0.3 && t < s.end + 0.3);
-      this.chip.textContent = t < 0 ? 'Get ready…' : seg ? (seg.mode === 'listen' ? '👂 Listen' : seg.mode === 'sing' ? '🎤 Your turn' : '🎤 Sing along') : '';
+      this.chip.textContent = t < 0 ? 'Get ready…' : seg ? (seg.mode === 'listen' ? 'Listen' : seg.mode === 'sing' ? 'Your turn' : 'Sing along') : '';
       this.chip.className = 'phase-chip ' + (seg ? seg.mode : '');
       this.lane.hideUserFrom = this.blind ? -1e9 : Infinity;
       const last = this.frames[this.frames.length - 1];
@@ -223,7 +224,7 @@ export class ExercisePlayer {
     guide.stopAll();
     if (this.off) this.off();
     if (this.duckedTanpura) tanpura.duck(false);
-    if (this.startBtn) { this.startBtn.textContent = '▶ Start'; this.startBtn.classList.add('primary'); }
+    if (this.startBtn) { this.startBtn.replaceChildren(icon('play', 16), 'Start'); this.startBtn.classList.add('primary'); }
     this.chip.textContent = '';
     if (!silent) { this.lane.hideUserFrom = Infinity; this.lane.draw(); }
   }
@@ -255,7 +256,7 @@ export class ExercisePlayer {
 
   renderResult(res, notes, hit) {
     const r = this.result; r.innerHTML = '';
-    const big = h('div', { class: 'score-big ' + (res.score >= 75 ? 'good' : res.score >= 50 ? 'ok' : 'bad') }, String(res.score));
+    const big = h('div', { class: 'score-big ' + (res.score >= 75 ? 'good' : res.score >= 50 ? 'ok' : 'bad'), style: `--p:${res.score}` }, String(res.score));
     const stats = h('div', { class: 'stats' },
       stat('In tune', Math.round(res.accuracy * 100) + '%'),
       stat('Sung', Math.round(res.coverage * 100) + '%'),
@@ -272,14 +273,14 @@ export class ExercisePlayer {
     r.append(h('div', { class: 'result-top' }, big, stats), chips);
     if (bias.length) r.append(h('p', { class: 'muted small' }, 'Per-swara tendency: ' + describeSwaraBias(bias.slice(0, 4))));
     r.append(tipList(res.tips.filter((t) => !/lag|behind|ahead/.test(t.title))));
-    r.append(h('div', { class: 'row' }, h('button', { class: 'btn', onclick: () => this.start() }, '↻ Again'), this.onNext ? h('button', { class: 'btn primary', onclick: () => this.onNext() }, 'Next →') : null));
+    r.append(h('div', { class: 'row' }, h('button', { class: 'btn', onclick: () => this.start() }, icon('loop', 15), 'Again'), this.onNext ? h('button', { class: 'btn primary', onclick: () => this.onNext() }, 'Next →') : null));
   }
 
   // ---- breath trainer -------------------------------------------------------
   loadBreath() {
     const orb = h('div', { class: 'breath-orb' }, h('span', {}, 'Ready'));
     const info = h('div', { class: 'breath-info' });
-    const btn = h('button', { class: 'btn primary', onclick: () => run() }, '▶ Start (3 rounds)');
+    const btn = h('button', { class: 'btn primary big', onclick: () => run() }, icon('play', 16), 'Start: 3 rounds');
     this.wrap.style.display = 'none';
     const box = h('div', { class: 'breath' }, orb, info);
     this.controls.append(btn);
@@ -320,7 +321,7 @@ export class ExercisePlayer {
       orb.firstChild.textContent = `Best ${best.toFixed(1)} s`;
       info.append(h('p', {}, best < 12 ? 'Goal: 20 s+. Breathe low (belly and sides expand), keep the hiss quiet and even, and don\'t push the air out.' : best < 25 ? 'Good. Aim for 25–30 s with an even, quiet hiss.' : 'Excellent breath control. Keep it even and relaxed.'));
       logActivity({ type: 'breath', id: 'breath', score: Math.min(100, Math.round((best / 30) * 100)), seconds: best, minutes: 1.5 });
-      btn.disabled = false; btn.textContent = '↻ Again';
+      btn.disabled = false; btn.replaceChildren(icon('loop', 15), 'Again');
       if (this.onNext) this.controls.append(h('button', { class: 'btn primary', onclick: () => this.onNext() }, 'Next →'));
       this.onDone && this.onDone({ score: best });
     };

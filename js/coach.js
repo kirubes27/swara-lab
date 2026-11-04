@@ -173,7 +173,7 @@ function tipsFor(r, { tol, rangeHi }) {
   if (r.ornRatio != null && r.ornRatio > 1.8) tips.push({ title: 'Extra movement where the melody is simple', level: 'low',
     detail: 'You are adding wobble or slides where the original is clean. Aim to land straight on each note.' });
   if (r.scoop > 0.35) tips.push({ title: 'Scooping into notes', level: 'mid', drill: 'pitchMatch',
-    detail: 'You often start below the note and slide up into it. Hear the note in your head before you sing (pre-hearing), then start the sound right on it. The pitch-match game trains exactly this.' });
+    detail: 'You often start below the note and slide up into it. Hear the note in your head before you sing (pre-hearing), then start the sound right on it. The pitch-matching drill trains exactly this.' });
   if (Math.abs(r.lag) >= 0.08) tips.push({ title: r.lag > 0 ? `You're about ${Math.round(r.lag * 1000)} ms behind` : `You're about ${Math.round(-r.lag * 1000)} ms ahead`, level: 'low',
     detail: r.lag > 0 ? 'Either you are following the singer instead of singing with them (learn the line until you can anticipate it), or your headphones add delay. Bluetooth headphones often add 150–250 ms. If it\'s always the same, set the latency in Settings.' : 'You rush ahead of the beat. Listen for the rhythm of the words.' });
   if (r.accuracy >= 0.8 && r.coverage >= 0.75) tips.unshift({ title: 'Solid take', level: 'good',

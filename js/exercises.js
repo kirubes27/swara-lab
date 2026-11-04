@@ -300,7 +300,7 @@ export const EXERCISES = {
   intervals: { name: 'Interval jumps', text: "S P S - S m S - S G S - S S' S - S D S - S R S -", bpm: 60, echo: true, mins: 2, tanpura: true,
     what: 'Jump cleanly from the key note to each note and back. Hear the target in your head before you sing it.',
     why: 'Leaps are where beginners miss most. Pre-hearing the target note ("audiation") before singing improves accuracy.' },
-  pitchMatch: { name: 'Pitch-match game', kind: 'match', mins: 2.5, tanpura: true,
+  pitchMatch: { name: 'Pitch matching', kind: 'match', mins: 2.5, tanpura: true,
     what: 'The app plays a random note, and you sing it back. 10 rounds. The score rewards quick, accurate landing.',
     why: 'Matching single notes with immediate feedback is the most direct way to train ear-to-voice mapping, and visual feedback during this kind of practice improves accuracy (Welch, Howard & Rush 1989).' },
   cooldown: { name: 'Cool-down: soft descending hum', text: 'P~S - m G R S - - P~S - -', bpm: 50, echo: false, mins: 1, tanpura: true,

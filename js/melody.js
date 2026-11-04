@@ -143,7 +143,7 @@ export class SalienceAnalyzer {
 
 // frames: array of {p, e} or null, evenly spaced by `hop` seconds.
 // Returns { hop, t0, cents: Float32Array (cents above 55 Hz, NaN = unvoiced), sal: Float32Array }
-export function trackMelody(frames, { hop = 0.01, t0 = 0, voicing = 0.22, jump = 0.25 } = {}) {
+export function trackMelody(frames, { hop = 0.01, t0 = 0, voicing = 0.22, jump = 0.25, silence: silenceRatio = 0.03 } = {}) {
   const T = frames.length;
   const cents = new Float32Array(T).fill(NaN);
   const salOut = new Float32Array(T);
@@ -153,7 +153,7 @@ export function trackMelody(frames, { hop = 0.01, t0 = 0, voicing = 0.22, jump =
   for (const f of frames) if (f) { energies.push(f.e); if (f.p.length) tops.push(f.p[1]); }
   energies.sort((a, b) => a - b); tops.sort((a, b) => a - b);
   const eRef = energies.length ? energies[Math.floor(energies.length * 0.9)] : 1;
-  const silence = eRef * 0.03;
+  const silence = eRef * silenceRatio;
   const sRef = tops.length ? tops[Math.floor(tops.length * 0.8)] : 1;
   const logUnv = Math.log(voicing);
   const switchCost = 1.2;
@@ -243,8 +243,8 @@ function cleanContour(c, hop) {
 }
 
 // Offline analysis of a (preferably ~22 kHz) stereo signal.
-export function analyzeSignal(L, R, sr, { hop = 0.01, onProgress } = {}) {
-  const an = new SalienceAnalyzer(sr);
+export function analyzeSignal(L, R, sr, { hop = 0.01, onProgress, center = 0.8, silence = 0.03 } = {}) {
+  const an = new SalienceAnalyzer(sr, { center });
   const hopS = Math.round(hop * sr);
   const frames = [];
   const n = Math.max(0, Math.floor((L.length - an.win) / hopS) + 1);
@@ -254,7 +254,8 @@ export function analyzeSignal(L, R, sr, { hop = 0.01, onProgress } = {}) {
   }
   // frame i covers [i*hop, i*hop+win]; its centre is the time stamp
   const t0 = an.win / 2 / sr;
-  return trackMelody(frames, { hop, t0 });
+  // label frames with the true hop (hopS samples), not the nominal one, or long songs drift
+  return trackMelody(frames, { hop: hopS / sr, t0, silence });
 }
 
 // Melody object helpers ----------------------------------------------------

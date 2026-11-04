@@ -5,45 +5,43 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>Swara Lab · singing trainer</title>
 <meta name="description" content="A free, personal singing trainer for any song: live pitch tracking, warm-ups, scale and ornament drills (vibrato, runs, slides, falsetto flips, Indian gamakas), and a song studio that extracts the melody from any song so you can see exactly where your notes go off.">
-<meta name="theme-color" content="#0f1115">
+<meta name="theme-color" content="#fbfbfd" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#000000" media="(prefers-color-scheme: dark)">
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Ccircle cx='32' cy='32' r='30' fill='%23f39c3d'/%3E%3Cpath d='M10 38c8-14 14 6 22-8s14 4 22-6' stroke='%230f1115' stroke-width='5' fill='none' stroke-linecap='round'/%3E%3C/svg%3E">
-<link rel="manifest" href="manifest.webmanifest">
-<link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
-<meta name="apple-mobile-web-app-capable" content="yes">
-<meta name="mobile-web-app-capable" content="yes">
-<meta name="apple-mobile-web-app-title" content="Swara Lab">
-<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <link rel="stylesheet" href="css/style.css">
 </head>
 <body>
 <header class="topbar">
-  <a class="brand" href="#today"><span class="logo" aria-hidden="true"></span>Swara Lab</a>
+  <a class="brand" href="#today" aria-label="Swara Lab home"><span class="mark" data-icon="practice"></span><span class="word">Swara Lab</span></a>
+  <nav class="nav" aria-label="Main">
+    <a href="#today">Today</a>
+    <a href="#songs">Songs</a>
+    <a href="#practice">Practice</a>
+    <a href="#progress">Progress</a>
+    <a href="#learn">Learn</a>
+  </nav>
   <div class="top-ctl">
-    <button id="installBtn" class="chip-btn accent" type="button" hidden>⬇ Install app</button>
-    <button id="saChip" class="chip-btn" type="button">Key</button>
-    <button id="tanpuraBtn" class="chip-btn" type="button" title="Drone on your key note">◎ Drone</button>
-    <button id="micBtn" class="chip-btn" type="button" title="Microphone"><span id="micLevel" class="lvl" aria-hidden="true"></span>🎤</button>
+    <button id="saChip" class="key-pill" type="button">Key</button>
+    <button id="tanpuraBtn" class="icon-btn" type="button" title="Drone" aria-label="Drone" data-icon="drone"></button>
+    <button id="micBtn" class="icon-btn" type="button" title="Microphone" aria-label="Microphone"><span id="micLevel" class="lvl" aria-hidden="true"></span><span data-icon="mic"></span></button>
+    <a class="icon-btn" href="#settings" title="Settings" aria-label="Settings" data-icon="gear"></a>
   </div>
 </header>
-<nav class="nav">
-  <a href="#today">Today</a>
-  <a href="#warmup">Warm-up</a>
-  <a href="#song">Song Studio</a>
-  <a href="#drills">Drills</a>
-  <a href="#range">Range</a>
-  <a href="#learn">Learn</a>
-  <a href="#progress">Progress</a>
-  <a href="#settings">Settings</a>
+<nav class="tabbar" aria-label="Main">
+  <a href="#today"><span data-icon="home"></span>Today</a>
+  <a href="#songs"><span data-icon="songs"></span>Songs</a>
+  <a href="#practice"><span data-icon="practice"></span>Practice</a>
+  <a href="#progress"><span data-icon="chart"></span>Progress</a>
+  <a href="#learn"><span data-icon="book"></span>Learn</a>
 </nav>
 <main>
   <section id="page-today" class="page"></section>
-  <section id="page-warmup" class="page" hidden></section>
   <section id="page-song" class="page" hidden></section>
-  <section id="page-drills" class="page" hidden></section>
-  <section id="page-range" class="page" hidden></section>
+  <section id="page-practice" class="page" hidden></section>
   <section id="page-progress" class="page" hidden></section>
   <section id="page-settings" class="page" hidden></section>
   <section id="page-learn" class="page prose" hidden>
+    <div class="eyebrow">Learn</div>
     <h1>Learning to sing on your own</h1>
     <p class="lead">Short version: <strong>sing in your key, practise a little every day, always compare what you sang with the target, and slowly take away the visual aids.</strong> This works for any song, whether it's Jeff Buckley, a Tamil film song or a musical theatre number. Below: why, plus fixes for the most common problems.</p>
 
@@ -76,7 +74,7 @@
       <li><strong>Pick your key.</strong> If lines go above your comfortable top, transpose down or sing an octave lower. Original keys suit the original singer, not you.</li>
       <li><strong>Learn line by line.</strong> Click a line to loop it. First <em>listen</em> 3–4 times at 0.75× with the guide tone on, and watch the shape.</li>
       <li><strong>Sing on "ah" first, words later.</strong> Get the melody and ornaments on a vowel, then add lyrics.</li>
-      <li><strong>Write out the notes.</strong> Each line shows its approximate notes. For a hard passage, type it into the <a href="#drills/custom">Note Pad</a> and drill it slowly over the drone.</li>
+      <li><strong>Write out the notes.</strong> Each line shows its approximate notes. For a hard passage, type it into the <a href="#practice/custom">Note Pad</a> and drill it slowly over the drone.</li>
       <li><strong>Speed up in steps:</strong> 0.6× → 0.75× → 0.85× → 1×. Move on when you get two good takes in a row.</li>
       <li><strong>Remove the crutches:</strong> switch to Song muted (guide tone only), then Blind mode, then sing with the original and listen back to your recording.</li>
     </ol>
@@ -87,12 +85,12 @@
         <ul><li>First check the key. Transposing 2–3 semitones down is not cheating; singers pick keys for their own voices.</li>
         <li>Don't push volume to go higher. Lighter is easier up there. Practise the high line on a lip trill or "ng" hum, then open to a vowel.</li>
         <li>Narrow the vowel on high notes ("ah" towards "uh"). Keep the jaw loose and the chin level, not lifted.</li>
-        <li>Build range gradually: <a href="#drills/sirens">sirens</a> and the <a href="#drills/fiveNote">5-note scale moving up</a>, a little beyond comfortable, never to strain.</li></ul></details>
+        <li>Build range gradually: <a href="#practice/sirens">sirens</a> and the <a href="#practice/fiveNote">5-note scale moving up</a>, a little beyond comfortable, never to strain.</li></ul></details>
       <details><summary>My voice cracks or flips between low and high</summary>
         <ul><li>The break is the transition between chest voice and head voice (or falsetto). Everyone has one.</li>
         <li>Sirens on a lip trill through the break, quietly, daily. The goal is a smooth blend ("mix"), not a louder chest voice.</li>
         <li>Lower the volume as you approach the break, and don't let the throat squeeze.</li>
-        <li>Some singers use the flip on purpose: Jeff Buckley, Bon Iver, yodelling, the "cry" in country and in Indian film songs. Practise it as a <em>controlled</em> move with the <a href="#drills/flips">register-flip drill</a>.</li></ul></details>
+        <li>Some singers use the flip on purpose: Jeff Buckley, Bon Iver, yodelling, the "cry" in country and in Indian film songs. Practise it as a <em>controlled</em> move with the <a href="#practice/flips">register-flip drill</a>.</li></ul></details>
       <details><summary>Falsetto, head voice and "mix"</summary>
         <ul><li><strong>Falsetto:</strong> light, airy, thin folds. It's easy to get high in, but it's breathy.</li>
         <li><strong>Head voice:</strong> also light, but with a clearer, more connected tone.</li>
@@ -101,10 +99,10 @@
       <details><summary>I'm consistently flat (or sharp)</summary>
         <ul><li>Flat: often low energy, tiredness, or a dark, swallowed vowel. Brighten the vowel slightly, give more breath support, keep the drone audible.</li>
         <li>Sharp: usually tension or over-blowing. Sing softer, and relax the shoulders and jaw.</li>
-        <li>Check your <a href="#progress">tuning map</a>: if one note of the scale is off (e.g. the 3rd is sharp), drill it with the <a href="#drills/pitchMatch">pitch-match game</a>.</li></ul></details>
+        <li>Check your <a href="#progress">tuning map</a>: if one note of the scale is off (e.g. the 3rd is sharp), drill it with <a href="#practice/pitchMatch">pitch matching</a>.</li></ul></details>
       <details><summary>My held notes wobble (or I can't do vibrato)</summary>
-        <ul><li>Steadiness comes from steady airflow. Do the <a href="#drills/breath">breath hiss</a> and <a href="#drills/saHold">long tones</a> daily.</li>
-        <li>Real vibrato appears when the voice is free and supported. Don't fake it with the jaw. The <a href="#drills/vibrato">vibrato drill</a> alternates straight and vibrato tones so you learn to control it.</li></ul></details>
+        <ul><li>Steadiness comes from steady airflow. Do the <a href="#practice/breath">breath hiss</a> and <a href="#practice/saHold">long tones</a> daily.</li>
+        <li>Real vibrato appears when the voice is free and supported. Don't fake it with the jaw. The <a href="#practice/vibrato">vibrato drill</a> alternates straight and vibrato tones so you learn to control it.</li></ul></details>
       <details><summary>Fast, curly bits: riffs, runs, flips and ornaments</summary>
         <p>What sounds like "two notes at once" is almost always a very fast ornament:</p>
         <ul><li><strong>Runs / riffs (melisma):</strong> several notes on one syllable, as in R&amp;B, gospel and pop. Usually built from the pentatonic scale.</li>
@@ -112,13 +110,13 @@
         <li><strong>Slides, scoops and fall-offs:</strong> gliding into or off a note (soul, rock, country).</li>
         <li><strong>Vibrato:</strong> a regular wobble on a held note, about 5–7 times a second.</li>
         <li><strong>In Indian music:</strong> <em>kan</em> (grace note), <em>murki</em> (quick 3–4 note turn), <em>gamak</em> (controlled oscillation between notes), <em>meend</em> (glide), <em>andolan</em> (slow swing).</li></ul>
-        <p>Method: loop the line at 0.5–0.6×, turn on the guide tone, look at the <em>shape</em> of the curve, and copy it on "ah". Then drill the move on its own (<a href="#drills/runs">runs</a>, <a href="#drills/kan">grace notes</a>, <a href="#drills/meend">slides</a>, <a href="#drills/vibrato">vibrato</a>). Speed comes last. A fast run sung loosely sounds worse than a slow one sung exactly.</p></details>
+        <p>Method: loop the line at 0.5–0.6×, turn on the guide tone, look at the <em>shape</em> of the curve, and copy it on "ah". Then drill the move on its own (<a href="#practice/runs">runs</a>, <a href="#practice/kan">grace notes</a>, <a href="#practice/meend">slides</a>, <a href="#practice/vibrato">vibrato</a>). Speed comes last. A fast run sung loosely sounds worse than a slow one sung exactly.</p></details>
       <details><summary>Microtones and "in-between" notes</summary>
         <p>Not all music sits on piano keys. Blues and rock bend the 3rd and 7th between minor and major ("blue notes"). Indian classical music places some notes differently, and sung against a drone a major 3rd tends to sit around 386¢ (piano: 400¢). For any song, follow the singer's curve: the reference line already contains their bends. In Settings, "Just intonation" shows drone-natural targets, and ±15¢ tolerance is there for fine work.</p></details>
       <details><summary>I run out of breath in long phrases</summary>
         <ul><li>Plan breath points: listen for where the singer breathes, and mark them.</li>
         <li>Inhale low and silently; don't start a long phrase with a loud, pushed onset.</li>
-        <li>Daily <a href="#drills/breath">hiss exercise</a>: aim for 25–30 s of even hiss.</li></ul></details>
+        <li>Daily <a href="#practice/breath">hiss exercise</a>: aim for 25–30 s of even hiss.</li></ul></details>
       <details><summary>My throat hurts</summary>
         <p>Stop for the day. Singing should never hurt. Common causes: singing too high or loud for too long, not warming up, dehydration, or pushing through a cold. Hoarseness or pain lasting more than two weeks, or a sudden loss of voice, needs an ENT doctor.</p></details>
     </div>
@@ -159,8 +157,9 @@
     <p class="muted small">Switch between general note names and Indian sargam (Hindustani or Carnatic) in Settings → Music style.</p>
 
     <h2>About this app</h2>
-    <p class="small">Everything runs in your browser: pitch detection (YIN), melody extraction from full song mixes (harmonic-summation salience with Viterbi tracking, in the spirit of Salamon &amp; Gómez's Melodia), drone synthesis, and storage. Nothing you sing or record is uploaded. Melody extraction from a mix with instruments isn't perfect: if a guitar solo, flute or violin line gets picked up, use "Fix the melody guide" in Song Studio. Chrome or Edge on desktop recommended (needed for tab-audio capture).</p>
+    <p class="small">Everything runs in your browser. Nothing you sing or record is uploaded. To learn a song, Swara Lab first separates the voice from the instruments with <a href="https://github.com/deezer/spleeter" target="_blank" rel="noopener">Spleeter</a> (Deezer, MIT licence) running in <a href="https://onnxruntime.ai" target="_blank" rel="noopener">ONNX Runtime Web</a>. It then traces the melody of the isolated voice with harmonic-summation salience and Viterbi tracking, in the spirit of Salamon &amp; Gómez's Melodia. Your own singing is tracked live with the YIN pitch detector. On real songs, separating the voice first cut false melody (instruments mistaken for the singer) from about 83% to 12% of non-singing moments. It isn't perfect: if a stretch looks wrong, use "Fix the melody guide" under the song. Chrome or Edge on a computer is recommended (needed for capturing YouTube audio).</p>
   </section>
+  <footer class="foot small muted">Swara Lab is free and open source. Your voice, songs and progress never leave this device. <a href="https://github.com/kirubes27/swara-lab" target="_blank" rel="noopener">Source on GitHub</a></footer>
 </main>
 <script type="module" src="js/app.js"></script>
 </body>

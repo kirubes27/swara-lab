@@ -9,6 +9,7 @@ import { settings, saveSettings, songs, getSong, upsertSong, removeSong, lastSon
 import { westernName, hzToMidi, midiToHz, kattaiName, kaliSafedName, percentile, saHzFrom, isIndian, term } from './music.js';
 import { h, toast, ensureMic, tipList, fmtTime } from './ui.js';
 import { LiveReadout, stat } from './practice.js';
+import { icon } from './icons.js';
 
 // ---------------------------------------------------------------------------
 // Players
@@ -89,7 +90,7 @@ class YTPlayer {
 
 class AudioPlayer {
   constructor(blob, { onState } = {}) {
-    this.kind = 'audio'; this.blob = blob; this.factor = 1; this.r = 1; this.st = 0; this.onState = onState;
+    this.kind = 'audio'; this.blob = blob; this.factor = 1; this.r = 1; this.st = 0; this.cur = 'mix|0'; this.onState = onState;
     this.a = new Audio(); this.a.preload = 'auto';
     this.a.preservesPitch = true; this.a.mozPreservesPitch = true; this.a.webkitPreservesPitch = true;
     this.url = URL.createObjectURL(blob); this.a.src = this.url;
@@ -111,47 +112,115 @@ class AudioPlayer {
     if (!this.buf) this.buf = await audioCtx().decodeAudioData(await this.blob.arrayBuffer());
     return this.buf;
   }
-  async setTranspose(st) {
-    this.target = st;
-    if (st === this.st) return;
-    let url = this.url, f = 1;
-    if (st !== 0) {
-      f = Math.pow(2, st / 12);
-      const buf = await this.decoded();
-      if (this.target !== st || this.dead) return; // superseded by a newer choice
-      const shifted = await renderRate(buf, f, Math.min(44100, buf.sampleRate));
-      if (this.target !== st || this.dead) return;
+  // vocals: Float32Array mono @44.1 kHz from the separation step
+  setVocals(v) { this.vocals = v; }
+  async setTranspose(st) { this.st0 = st; return this.rebuild(); }
+  async setSound(mode) { this.mode0 = mode; return this.rebuild(); }
+  async rebuild() {
+    const st = this.st0 ?? this.st ?? 0, mode = this.vocals ? (this.mode0 || 'mix') : 'mix';
+    const want = mode + '|' + st;
+    this.target = want;
+    if (want === (this.cur || 'mix|0')) return;
+    let url = this.url, f = Math.pow(2, st / 12);
+    if (want !== 'mix|0') {
+      let src = await this.decoded();
+      if (this.target !== want || this.dead) return;
+      if (mode !== 'mix') src = await this.stemBuffer(mode);
+      if (this.target !== want || this.dead) return;
+      if (st) src = await renderRate(src, f, Math.min(44100, src.sampleRate));
+      if (this.target !== want || this.dead) return; // superseded by a newer choice
       if (this.shiftUrl) URL.revokeObjectURL(this.shiftUrl);
-      url = this.shiftUrl = URL.createObjectURL(audioBufferToWav(shifted));
+      url = this.shiftUrl = URL.createObjectURL(audioBufferToWav(src));
     }
     const t = this.time(), was = this.playing;
     this.pause();
-    this.factor = f; this.a.src = url;
-    this.st = st;
+    this.factor = st ? f : 1; this.a.src = url;
+    this.st = st; this.cur = want;
     await new Promise((res) => this.a.addEventListener('loadedmetadata', res, { once: true }));
     this.setRate(this.r); this.seek(t);
     if (was) this.play();
+  }
+  async stemBuffer(mode) {
+    this.stems = this.stems || {};
+    if (this.stems[mode]) return this.stems[mode];
+    const orig = await renderRate(await this.decoded(), 1, 44100);
+    const v = this.vocals, n = Math.min(orig.length, v.length);
+    const out = new AudioBuffer({ numberOfChannels: orig.numberOfChannels, length: orig.length, sampleRate: 44100 });
+    for (let ch = 0; ch < orig.numberOfChannels; ch++) {
+      const x = orig.getChannelData(ch), o = out.getChannelData(ch);
+      if (mode === 'vocals') for (let i = 0; i < n; i++) o[i] = v[i];
+      else { o.set(x); for (let i = 0; i < n; i++) o[i] = x[i] - v[i]; }
+    }
+    return (this.stems[mode] = out);
   }
   destroy() { this.dead = true; this.pause(); this.a.removeAttribute('src'); this.a.load(); URL.revokeObjectURL(this.url); if (this.shiftUrl) URL.revokeObjectURL(this.shiftUrl); }
 }
 
 // ---------------------------------------------------------------------------
-async function analyzeBlob(blob, onProgress) {
-  const c = audioCtx();
-  const buf = await c.decodeAudioData(await blob.arrayBuffer());
-  const small = await renderRate(buf, 1, 22050);
-  const L = small.getChannelData(0).slice(), R = (small.numberOfChannels > 1 ? small.getChannelData(1) : small.getChannelData(0)).slice();
+const MODEL_URL = new URL('../models/spleeter-vocals.onnx', import.meta.url).href;
+function runWorker(url, msg, transfer, onProgress) {
   return new Promise((res, rej) => {
-    const w = new Worker(new URL('./worker.js', import.meta.url), { type: 'module' });
+    const w = new Worker(new URL(url, import.meta.url), { type: 'module' });
     w.onmessage = (e) => {
-      if (e.data.progress != null) onProgress && onProgress(e.data.progress);
-      if (e.data.done) { w.terminate(); res(e.data.mel); }
+      if (e.data.progress != null) onProgress && onProgress(e.data.progress, e.data.stage);
+      if (e.data.done) { w.terminate(); res(e.data); }
       if (e.data.error) { w.terminate(); rej(new Error(e.data.error)); }
     };
     w.onerror = (e) => { w.terminate(); rej(new Error(e.message || 'worker failed')); };
-    w.postMessage({ L, R, sr: 22050 }, [L.buffer, R.buffer]);
+    w.postMessage(msg, transfer);
   });
 }
+// Separate the voice from the music (Spleeter, in a worker), then track pitch on the voice alone.
+// Falls back to the mix-based tracker if separation can't run in this browser.
+async function analyzeBlob(blob, onProgress) {
+  const c = audioCtx();
+  const buf = await c.decodeAudioData(await blob.arrayBuffer());
+  try {
+    const b44 = await renderRate(buf, 1, 44100);
+    const L = b44.getChannelData(0).slice(), R = (b44.numberOfChannels > 1 ? b44.getChannelData(1) : b44.getChannelData(0)).slice();
+    const r = await runWorker('./sep-worker.js', { L, R, modelUrl: MODEL_URL }, [L.buffer, R.buffer], onProgress);
+    return { mel: r.mel, vocals: r.vocals, separated: true };
+  } catch (err) {
+    console.warn('vocal separation unavailable, using mix-based tracking:', err);
+    toast('Voice separation isn\'t available in this browser, so the melody is traced from the full mix (less accurate).', 'info', 7000);
+    const small = await renderRate(buf, 1, 22050);
+    const L = small.getChannelData(0).slice(), R = (small.numberOfChannels > 1 ? small.getChannelData(1) : small.getChannelData(0)).slice();
+    const r = await runWorker('./worker.js', { L, R, sr: 22050 }, [L.buffer, R.buffer], (p) => onProgress && onProgress(p, 'Tracking the melody…'));
+    return { mel: r.mel, vocals: null, separated: false };
+  }
+}
+// Map a melody measured on the recording's clock onto video time, using the (recording, video) time
+// pairs logged during capture, then fine-tune the offset against the live contour.
+function placeOnVideo(recMel, mapping, liveCents, frames, minI, maxI) {
+  const n = liveCents.length, rtOf = new Float32Array(n).fill(NaN);
+  for (let k = 1; k < mapping.length; k++) {
+    const m0 = mapping[k - 1], m1 = mapping[k];
+    const dv = m1.vt - m0.vt, dr = m1.rt - m0.rt;
+    if (!m0.on || !m1.on || dv <= 0 || dv > 0.6 || dr <= 0 || dr > 0.6) continue;
+    for (let g = Math.ceil(m0.vt / 0.01); g <= Math.floor(m1.vt / 0.01) && g < n; g++) rtOf[g] = m0.rt + ((g * 0.01 - m0.vt) * dr) / dv;
+  }
+  let best = 0, bestScore = -1;
+  for (let d = -0.5; d <= 0.5001; d += 0.01) {
+    let sc = 0;
+    for (let g = minI; g <= maxI; g += 4) {
+      const rt = rtOf[g], lv = liveCents[g];
+      if (isNaN(rt) || isNaN(lv)) continue;
+      const v = melodyAt(recMel, rt + d);
+      if (!isNaN(v) && Math.abs(wrap1200(v - lv)) < 80) sc++;
+    }
+    if (sc > bestScore) { bestScore = sc; best = d; }
+  }
+  if (bestScore < 20) return null; // couldn't line up (e.g. silent capture)
+  const out = Float32Array.from(liveCents);
+  for (let g = minI; g <= maxI && g < n; g++) {
+    if (!(frames.has(g) || frames.has(g - 1) || frames.has(g + 1))) continue; // keep earlier captures elsewhere
+    out[g] = isNaN(rtOf[g]) ? NaN : melodyAt(recMel, rtOf[g] + best);
+  }
+  return out;
+}
+const wrap1200 = (d) => ((((d + 600) % 1200) + 1200) % 1200) - 600;
+const toI16 = (f) => { const o = new Int16Array(f.length); for (let i = 0; i < f.length; i++) o[i] = Math.max(-32768, Math.min(32767, Math.round(f[i] * 32767))); return o; };
+const fromI16 = (a) => { const o = new Float32Array(a.length); for (let i = 0; i < a.length; i++) o[i] = a[i] / 32767; return o; };
 
 const cAbove55 = (hz) => 1200 * Math.log2(hz / F_REF);
 
@@ -181,21 +250,21 @@ export class SongStudio {
   build() {
     const r = this.root;
     r.innerHTML = '';
-    this.sel = h('select', { class: 'song-select', onchange: (e) => this.open(e.target.value) });
-    const addBtn = h('button', { class: 'btn', onclick: () => this.addBox.classList.toggle('open') }, '+ Add song');
-    this.ytInput = h('input', { type: 'url', placeholder: 'Paste a YouTube link (or Spotify link for instructions)…', class: 'grow' });
+    this.sel = h('select', { class: 'song-select', 'aria-label': 'Song', onchange: (e) => this.open(e.target.value) });
+    const addBtn = h('button', { class: 'btn primary', onclick: () => this.addBox.classList.toggle('open') }, icon('plus', 16), 'Add song');
+    this.ytInput = h('input', { type: 'url', placeholder: 'Paste a YouTube link', class: 'grow' });
     const fileIn = h('input', { type: 'file', accept: 'audio/*,video/*', style: 'display:none', onchange: (e) => e.target.files[0] && this.addFile(e.target.files[0]) });
+    const row = (ic, title, sub, onclick) => h('button', { class: 'li', onclick }, h('span', { class: 'li-ic' }, icon(ic, 18)), h('span', { class: 'li-text' }, h('strong', {}, title), h('small', {}, sub)), h('span', { class: 'li-end' }, icon('chevron', 16)));
     this.addBox = h('div', { class: 'add-box' },
-      h('div', { class: 'row' }, this.ytInput, h('button', { class: 'btn primary', onclick: () => this.addUrl(this.ytInput.value) }, 'Load')),
-      h('div', { class: 'row wrap' },
-        h('button', { class: 'btn', onclick: () => fileIn.click() }, '📁 Upload an audio file'), fileIn,
-        h('button', { class: 'btn', onclick: () => this.recordOtherTab() }, '⏺ Record from another tab (Spotify, etc.)'),
-      ),
-      h('p', { class: 'muted small' }, 'YouTube plays right here. For other services, open the song in another Chrome tab and record it. The recording stays in this browser and is only used for your practice.'),
-    );
+      h('div', { class: 'list' },
+        row('upload', 'Import an audio file', 'MP3, M4A, WAV… Songs you own, karaoke tracks, recordings.', () => fileIn.click()),
+        row('record', 'Record from another tab', 'Play the song in another Chrome tab (Spotify, YouTube…) and record it here.', () => this.recordOtherTab()),
+        h('div', { class: 'yt-row' }, h('span', { class: 'li-ic' }, icon('link', 18)), this.ytInput, h('button', { class: 'btn', onclick: () => this.addUrl(this.ytInput.value) }, 'Add'))),
+      fileIn,
+      h('p', { class: 'muted small' }, 'Recordings and files stay in this browser and are only used for your practice.'));
     this.playerBox = h('div', { class: 'player-box' });
     this.info = h('div', { class: 'song-info' });
-    this.overviewCanvas = h('canvas', { class: 'overview' });
+    this.overviewCanvas = h('canvas', { class: 'overview', title: 'Click to jump · drag to loop a section' });
     this.laneCanvas = h('canvas', { class: 'lane tall' });
     const ro = h('div');
     this.chip = h('div', { class: 'phase-chip' });
@@ -206,7 +275,8 @@ export class SongStudio {
     this.feedback = h('div', { class: 'feedback' });
     this.tools = h('details', { class: 'tools' });
     r.append(
-      h('div', { class: 'row song-top' }, this.sel, addBtn, h('button', { class: 'btn ghost small', title: 'Remove this song from the library', onclick: () => this.remove() }, 'Remove')),
+      h('div', { class: 'page-head' }, h('h1', {}, 'Songs'), h('p', { class: 'lead' }, 'Pick a song, loop one line at a time, and sing against the original melody.')),
+      h('div', { class: 'row song-top' }, this.sel, addBtn, h('button', { class: 'btn ghost', title: 'Remove this song from the library', onclick: () => this.remove() }, icon('trash', 16), 'Remove')),
       this.addBox,
       h('div', { class: 'song-grid' }, this.playerBox, this.info),
       this.overviewCanvas, this.laneWrap, this.transport,
@@ -226,28 +296,43 @@ export class SongStudio {
 
   buildTransport() {
     const t = this.transport; t.innerHTML = '';
-    this.playBtn = h('button', { class: 'btn primary', title: 'Space', onclick: () => this.toggle() }, '▶');
+    const seg = (items, cur, onpick, title) => {
+      const el = h('div', { class: 'seg', title });
+      for (const [v, label] of items) el.append(h('button', { class: v === cur ? 'on' : '', onclick: () => { [...el.children].forEach((b) => b.classList.toggle('on', b.dataset.v == String(v))); onpick(v); }, 'data-v': String(v) }, label));
+      return el;
+    };
+    this.playBtn = h('button', { class: 'btn primary round big', title: 'Play / pause (Space)', 'aria-label': 'Play', onclick: () => this.toggle() }, icon('play', 22));
     this.timeEl = h('span', { class: 'mono time' }, '0:00');
-    const speeds = [0.5, 0.6, 0.75, 0.85, 1];
-    const speedSel = h('select', { title: 'Playback speed (pitch is preserved)', onchange: (e) => { this.speed = +e.target.value; this.player && this.player.setRate(this.speed); } },
-      ...speeds.map((s) => h('option', { value: s, selected: s === 1 }, s + '×')));
-    this.loopChk = h('input', { type: 'checkbox', onchange: (e) => { this.loopOn = e.target.checked; this.syncLoopUI(); } });
-    const modeSel = h('select', { title: 'How the song plays while you sing', onchange: (e) => this.setMode(e.target.value) },
-      h('option', { value: 'along' }, 'Sing along'), h('option', { value: 'muted' }, 'Song muted (solo)'), h('option', { value: 'blind' }, 'Blind (no live line)'));
-    const guideChk = h('input', { type: 'checkbox', onchange: (e) => { this.guideOn = e.target.checked; if (!this.guideOn) this.follower.set(0); } });
-    this.micBtn = h('button', { class: 'btn', title: 'M', onclick: () => this.toggleMic() }, '🎤 Mic off');
+    this.loopBtn = h('button', { class: 'btn small', title: 'Loop the selected line or A–B section (L)', onclick: () => { this.loopOn = !this.loopOn; this.syncLoopUI(); } }, icon('loop', 15), 'Loop');
+    this.aBtn = h('button', { class: 'btn small', title: 'Set loop start at the current position ([)', onclick: () => this.markAB('a') }, 'A start');
+    this.bBtn = h('button', { class: 'btn small', title: 'Set loop end at the current position (])', onclick: () => this.markAB('b') }, 'B end');
+    this.clearBtn = h('button', { class: 'btn small ghost', title: 'Remove the loop', onclick: () => this.clearLoop() }, 'Clear');
+    const speedSeg = seg([[0.5, '0.5×'], [0.6, '0.6×'], [0.75, '0.75×'], [0.85, '0.85×'], [1, '1×']], 1, (v) => { this.speed = v; this.player && this.player.setRate(v); }, 'Playback speed (pitch stays the same)');
+    this.micBtn = h('button', { class: 'btn small', title: 'Microphone (M)', onclick: () => this.toggleMic() }, icon('mic', 15), 'Mic');
+    const modeSeg = seg([['along', 'Sing along'], ['muted', 'Solo'], ['blind', 'Blind']], this.mode, (v) => this.setMode(v), 'Sing along with the song, sing with it muted, or hide your live line');
+    this.soundSeg = seg([['mix', 'Original'], ['vocals', 'Voice only'], ['karaoke', 'Backing']], 'mix', (v) => this.setSound(v), 'Hear the full song, the separated voice, or the backing track (karaoke)');
+    this.guideChk = h('input', { type: 'checkbox', 'aria-label': 'Guide tone', onchange: (e) => { this.guideOn = e.target.checked; if (!this.guideOn) this.follower.set(0); } });
     this.octSel = h('select', { title: 'Which octave you sing in, relative to the original singer', onchange: (e) => { this.song.octave = +e.target.value; upsertSong(this.song); this.refreshKey(); } },
       h('option', { value: -1 }, 'Octave −1'), h('option', { value: 0, selected: true }, 'Same octave'), h('option', { value: 1 }, 'Octave +1'));
-    this.trSel = h('select', { title: 'Transpose (practice copy / audio files only)', onchange: (e) => this.setTranspose(+e.target.value) },
-      ...Array.from({ length: 13 }, (_, i) => i - 6).map((v) => h('option', { value: v, selected: v === 0 }, (v > 0 ? '+' : '') + v + ' st')));
+    this.trSel = h('select', { title: 'Transpose (audio files and practice copies)', onchange: (e) => this.setTranspose(+e.target.value) },
+      ...Array.from({ length: 13 }, (_, i) => i - 6).map((v) => h('option', { value: v, selected: v === 0 }, v === 0 ? 'Original key' : (v > 0 ? '+' : '') + v + ' semitones')));
     t.append(
-      h('div', { class: 'tgroup' }, h('button', { class: 'btn', title: 'Previous line (↑)', onclick: () => this.stepPhrase(-1) }, '⏮'), this.playBtn, h('button', { class: 'btn', title: 'Next line (↓)', onclick: () => this.stepPhrase(1) }, '⏭'), this.timeEl),
-      h('div', { class: 'tgroup' }, h('label', { class: 'ctl', title: 'L' }, this.loopChk, ' Loop line'), h('button', { class: 'btn small', title: '[ key', onclick: () => this.markAB('a') }, 'A'), h('button', { class: 'btn small', title: '] key', onclick: () => this.markAB('b') }, 'B'), h('label', { class: 'ctl' }, 'Speed ', speedSel)),
-      h('div', { class: 'tgroup' }, this.micBtn, h('label', { class: 'ctl' }, modeSel), h('label', { class: 'ctl', title: 'Play the extracted melody as a clear tone (G)' }, guideChk, ' Guide tone')),
-      h('div', { class: 'tgroup' }, h('label', { class: 'ctl' }, this.octSel), h('label', { class: 'ctl', title: 'Transpose' }, 'Key ', this.trSel)),
+      h('div', { class: 'tgroup main' }, h('button', { class: 'btn round', title: 'Previous line (↑)', 'aria-label': 'Previous line', onclick: () => this.stepPhrase(-1) }, icon('prev', 18)), this.playBtn, h('button', { class: 'btn round', title: 'Next line (↓)', 'aria-label': 'Next line', onclick: () => this.stepPhrase(1) }, icon('next', 18)), this.timeEl),
+      h('div', { class: 'tgroup' }, this.loopBtn, this.aBtn, this.bBtn, this.clearBtn),
+      h('div', { class: 'tgroup' }, speedSeg),
+      h('div', { class: 'tgroup' }, this.micBtn, modeSeg),
+      h('div', { class: 'tgroup' }, this.soundSeg, h('label', { class: 'ctl', title: 'Play the melody as a clear tone (G)' }, this.guideChk, 'Guide tone')),
+      h('div', { class: 'tgroup' }, this.octSel, this.trSel),
     );
-    this.guideChk = guideChk;
   }
+  async setSound(mode) {
+    if (!(this.player && this.player.kind === 'audio')) { toast('Voice-only and backing track work on imported songs and practice copies.', 'info'); this.syncSoundSeg(); return; }
+    if (!this.player.vocals) { toast('Analyse the song first. That step separates the voice from the music.', 'info'); this.syncSoundSeg(); return; }
+    this.setStatus(mode === 'mix' ? '' : 'Preparing ' + (mode === 'vocals' ? 'the voice track' : 'the backing track') + '…');
+    await this.player.setSound(mode);
+    this.sound = mode; this.setStatus('');
+  }
+  syncSoundSeg() { if (this.soundSeg) [...this.soundSeg.children].forEach((b) => b.classList.toggle('on', b.dataset.v === (this.sound || 'mix'))); }
 
   // ---- library ---------------------------------------------------------------
   refreshSelect() {
@@ -297,7 +382,7 @@ export class SongStudio {
     s.octave = s.octave || 0; s.transpose = s.transpose || 0; s.best = s.best || {}; s.sync = s.sync || 0;
     this.source = s.kind === 'audio' ? 'audio' : (s.useCopy && s.hasCopy ? 'audio' : 'youtube');
     this.refreshSelect();
-    this.loop = null; this.loopOn = false; this.loopChk.checked = false;
+    this.loop = null; this.pendingA = null; this.loopOn = false; this.syncLoopUI();
     this.octSel.value = String(s.octave);
     this.trSel.value = '0';
     await this.mountPlayer();
@@ -327,8 +412,11 @@ export class SongStudio {
       if (!blob) { this.playerBox.append(h('div', { class: 'warn' }, 'The audio for this song is missing from this browser. Add it again.')); return; }
       this.player = new AudioPlayer(blob, { onState: (st) => this.onState(st) });
       await this.player.ready;
-      const cover = h('div', { class: 'audio-cover' }, h('div', { class: 'big' }, '♪'), h('div', {}, s.title));
+      const cover = h('div', { class: 'audio-cover' }, h('div', { class: 'big' }, icon('songs', 44)), h('div', {}, s.title));
       this.playerBox.append(cover);
+      const stem = await idbGet('audio', s.id + ':vocals');
+      if (stem && this.player) this.player.setVocals(fromI16(stem));
+      this.sound = 'mix'; this.syncSoundSeg();
       if (s.transpose) { this.trSel.value = String(s.transpose); await this.player.setTranspose(s.transpose); }
     }
     this.player.setRate(this.speed);
@@ -397,13 +485,13 @@ export class SongStudio {
     // melody status
     if (!this.mel) {
       i.append(h('div', { class: 'callout' },
-        h('strong', {}, 'Step 1: build the melody guide'),
+        h('strong', {}, 'First, build the melody guide'),
         h('p', {}, this.source === 'youtube'
-          ? 'The app listens to the song once as it plays and extracts the vocal melody. Click below, pick "This tab", and switch on "Also share tab audio". Then let the song play. Keep this tab open; you can stop early and capture the rest later.'
-          : 'Analyse the audio file to extract the vocal melody (about 5–15 seconds).'),
+          ? 'Swara Lab listens to the song once while it plays, separates the voice from the instruments, and traces the melody. Click below, choose "This tab", and switch on "Also share tab audio". Keep this tab open while the song plays.'
+          : 'Swara Lab separates the voice from the instruments and traces the melody. It runs on your computer and takes about a minute for a full song.'),
         this.source === 'youtube'
-          ? h('div', { class: 'row wrap' }, h('button', { class: 'btn primary', onclick: () => this.captureTab() }, '🎧 Build melody guide'), h('label', { class: 'ctl small' }, h('input', { type: 'checkbox', id: 'keepCopy', checked: true }), ' also save a practice copy (enables transpose)'))
-          : h('button', { class: 'btn primary', onclick: () => this.analyzeAudio() }, '🔍 Analyse melody'),
+          ? h('button', { class: 'btn primary', onclick: () => this.captureTab() }, icon('headphones', 16), 'Build melody guide')
+          : h('button', { class: 'btn primary', onclick: () => this.analyzeAudio() }, icon('sparkle', 16), 'Analyse the song'),
       ));
     } else {
       const sa = this.songSa, m = hzToMidi(sa);
@@ -421,13 +509,14 @@ export class SongStudio {
       const span = `${westernName(hzToMidi(this.melP5))}–${westernName(hzToMidi(this.melP95))}`;
       if (fit) {
         const b = fit.best;
-        const msg = b.st === 0 && b.oct === 0 ? `Melody spans ${span}. It fits your range as is. 👍`
+        const msg = b.st === 0 && b.oct === 0 ? `Melody spans ${span}. It fits your range as it is.`
           : `Melody spans ${span}. ${fit.asIs.over > 0 ? `As is, it goes ${fit.asIs.over} semitone(s) outside your comfortable range. ` : ''}Best fit: ${b.oct ? `octave ${b.oct > 0 ? '+1' : '−1'} ` : ''}${b.st ? `${b.st > 0 ? '+' : ''}${b.st} semitones` : ''}.`;
         i.append(h('p', { class: 'small' }, msg, ' ', h('a', { href: '#', onclick: (e) => { e.preventDefault(); this.applyFit(b); } }, 'Apply')));
       } else i.append(h('p', { class: 'small muted' }, `Melody spans ${span}. `, h('a', { href: '#range' }, 'Do the range test'), ' to get a key suggestion.'));
       const row = h('div', { class: 'row wrap' });
-      if (this.source === 'youtube') row.append(h('button', { class: 'btn small', onclick: () => this.captureTab() }, '🎧 Re-capture / fill gaps'));
-      else row.append(h('button', { class: 'btn small', onclick: () => this.analyzeAudio() }, '🔍 Re-analyse'));
+      if (this.source === 'youtube') row.append(h('button', { class: 'btn small', onclick: () => this.captureTab() }, icon('headphones', 14), 'Capture again'));
+      else row.append(h('button', { class: 'btn small', onclick: () => this.analyzeAudio() }, icon('sparkle', 14), 'Re-analyse'));
+      if (!s[this.source + 'Separated']) row.append(h('span', { class: 'small muted' }, 'Traced from the full mix. Re-analyse to separate the voice for better accuracy.'));
       i.append(row);
     }
     this.status = h('div', { class: 'status small' });
@@ -475,10 +564,10 @@ export class SongStudio {
       list.append(li);
     });
     const orn = h('input', { type: 'checkbox', checked: !!settings.showOrnaments, onchange: (e) => { saveSettings({ showOrnaments: e.target.checked }); this.refreshKey(); this.renderPhrases(); } });
-    b.append(list, h('label', { class: 'ctl small' }, orn, ' Show ornaments'),
-      settings.showOrnaments ? h('p', { class: 'muted small' }, isIndian(settings)
+    b.append(list, h('label', { class: 'ctl small' }, orn, ' Show ornaments'));
+    if (settings.showOrnaments) b.append(h('p', { class: 'muted small' }, isIndian(settings)
         ? '~ = meend (slide), * = gamak (shake), (x) = kan swar (grace note). '
-        : '~ = slide, * = shake/trill, (x) = grace note. ', h('a', { href: '#learn' }, 'What are these?')) : null);
+        : '~ = slide, * = shake/trill, (x) = grace note. ', h('a', { href: '#learn' }, 'What are these?')));
   }
   loopPhrase(i) {
     const p = this.song && this.phrases && this.phrases[i]; if (!p) return;
@@ -496,24 +585,40 @@ export class SongStudio {
   }
   setLoop(a, b, on) {
     if (!isFinite(a) || !isFinite(b) || b <= a) return;
-    this.loop = { a, b };
+    this.loop = { a, b }; this.pendingA = null;
     this.curPhrase = null; // a custom loop isn't one of the detected lines
-    if (on) { this.loopOn = true; this.loopChk.checked = true; }
+    if (on) this.loopOn = true;
     this.syncLoopUI();
     this.finishTake(true);
   }
+  // A marks the start (playback carries on); B marks the end, and looping starts from A.
   markAB(which) {
-    const t = this.player ? this.player.time() : 0;
-    if (!this.loop) this.loop = { a: t, b: t + 5 };
-    this.loop[which] = t;
-    if (this.loop.b < this.loop.a + 0.5) this.loop.b = this.loop.a + 0.5;
-    this.curPhrase = null;
-    this.finishTake(true);
-    this.loopOn = true; this.loopChk.checked = true; this.syncLoopUI();
+    if (!this.player) return;
+    const t = this.player.time();
+    if (which === 'a') {
+      this.finishTake(true);
+      this.pendingA = t; this.loop = null; this.loopOn = false; this.curPhrase = null;
+      this.syncLoopUI(); this.renderPhrases();
+      toast(`Loop start set at ${fmtTime(t)}. Press "B end" where the section should stop.`, 'info', 3500);
+      return;
+    }
+    const a = this.pendingA ?? (this.loop ? this.loop.a : null);
+    if (a == null) { toast('Set the start first with "A start".', 'info'); return; }
+    if (t <= a + 0.3) { toast('The end needs to be after the start.', 'info'); return; }
+    this.setLoop(a, t, true);
+    this.player.seek(a);
+  }
+  clearLoop() {
+    this.loop = null; this.pendingA = null; this.loopOn = false; this.curPhrase = null;
+    this.syncLoopUI(); this.renderPhrases();
   }
   syncLoopUI() {
-    this.overview.loop = this.loopOn ? this.loop : null;
-    this.lane.regions = this.loopOn && this.loop ? [{ start: this.loop.a, end: this.loop.b, kind: 'loop' }] : [];
+    const show = !!(this.loopOn && this.loop);
+    const marker = this.pendingA != null ? { a: this.pendingA, b: this.pendingA + 0.05 } : null;
+    this.overview.loop = show ? this.loop : marker;
+    this.lane.regions = show ? [{ start: this.loop.a, end: this.loop.b, kind: 'loop' }] : marker ? [{ start: marker.a, end: marker.a + 0.04, kind: 'loop', label: 'A' }] : [];
+    if (this.loopBtn) { this.loopBtn.classList.toggle('on', show); this.loopBtn.disabled = !this.loop; }
+    if (this.aBtn) this.aBtn.classList.toggle('on', this.pendingA != null);
   }
 
   // ---- transport ---------------------------------------------------------------
@@ -536,9 +641,9 @@ export class SongStudio {
     else await ensureMic();
     this.syncMicBtn();
   }
-  syncMicBtn() { this.micBtn.textContent = mic.running ? '🎤 Mic on' : '🎤 Mic off'; this.micBtn.classList.toggle('on', mic.running); }
+  syncMicBtn() { this.micBtn.replaceChildren(icon('mic', 15), mic.running ? 'Mic on' : 'Mic'); this.micBtn.classList.toggle('on', mic.running); }
   onState(st) {
-    this.playBtn.textContent = st === 1 ? '⏸' : '▶';
+    this.playBtn.replaceChildren(icon(st === 1 ? 'pause' : 'play', 22));
     if (st !== 1) this.follower.set(0);
     if (st === 2 || st === 0) this.finishTake(); // paused / ended (not buffering)
   }
@@ -548,7 +653,7 @@ export class SongStudio {
     if (k === ' ') { e.preventDefault(); this.toggle(); }
     else if (k === '[') this.markAB('a');
     else if (k === ']') this.markAB('b');
-    else if (k === 'l' || k === 'L') { this.loopOn = !this.loopOn; this.loopChk.checked = this.loopOn; this.syncLoopUI(); }
+    else if (k === 'l' || k === 'L') { if (this.loop) { this.loopOn = !this.loopOn; this.syncLoopUI(); } }
     else if (k === 'ArrowLeft') { this.player && this.player.seek(this.player.time() - 2); }
     else if (k === 'ArrowRight') { this.player && this.player.seek(this.player.time() + 2); }
     else if (k === 'ArrowUp') { e.preventDefault(); this.stepPhrase(-1); }
@@ -603,7 +708,7 @@ export class SongStudio {
       const ref = this.refAt(t);
       const cls = mic.running ? this.readout.update(last && playing ? last.c : (mic.last && mic.last.hz > 0 ? 1200 * Math.log2(mic.last.hz / this.practiceSa) : NaN), this.practiceSa, ref) : this.readout.update(NaN);
       this.lane.live = mic.running && this.mode !== 'blind' && last && playing ? { c: last.c, color: cls ? getComputedStyle(this.root).getPropertyValue('--' + cls) : null } : null;
-      this.chip.textContent = this.capturing ? '● Capturing melody…' : (mic.running && playing ? (this.loopOn ? '🎤 Take in progress' : '🎤 Singing') : '');
+      this.chip.textContent = this.capturing ? 'Listening to the song…' : (mic.running && playing ? (this.loopOn ? 'Take in progress' : 'Singing') : '');
       this.chip.className = 'phase-chip ' + (this.capturing ? 'listen' : 'sing');
       this.lane.draw();
       this.overview.duration = p ? p.duration() || (this.mel ? melodyDuration(this.mel) : 0) : 0;
@@ -643,7 +748,7 @@ export class SongStudio {
   }
   renderFeedback(res, blob) {
     const f = this.feedback; f.innerHTML = '';
-    const big = h('div', { class: 'score-big ' + (res.score >= 75 ? 'good' : res.score >= 50 ? 'ok' : 'bad') }, String(res.score));
+    const big = h('div', { class: 'score-big ' + (res.score >= 75 ? 'good' : res.score >= 50 ? 'ok' : 'bad'), style: `--p:${res.score}` }, String(res.score));
     f.append(h('div', { class: 'result-top' }, big, h('div', { class: 'stats' },
       stat('In tune', Math.round(res.accuracy * 100) + '%'), stat('Sung', Math.round(res.coverage * 100) + '%'),
       stat('Avg offset', (res.bias > 0 ? '+' : '') + Math.round(res.bias) + '¢'),
@@ -657,7 +762,7 @@ export class SongStudio {
       const url = URL.createObjectURL(blob);
       const au = h('audio', { controls: true, src: url, class: 'take-audio' });
       f.append(h('div', { class: 'row wrap' }, h('span', { class: 'small muted' }, 'Your take: '), au,
-        h('button', { class: 'btn small', onclick: () => this.playTakeWithSong(url) }, '▶ Take + song')));
+        h('button', { class: 'btn small', onclick: () => this.playTakeWithSong(url) }, icon('play', 14), 'Take + song')));
     }
   }
   async playTakeWithSong(url) {
@@ -682,7 +787,7 @@ export class SongStudio {
   // ---- melody capture from this tab (YouTube) --------------------------------------
   async captureTab() {
     if (!navigator.mediaDevices || !navigator.mediaDevices.getDisplayMedia) return toast('Tab audio capture needs desktop Chrome or Edge. Alternatively upload the song as an audio file.', 'bad', 7000);
-    const keepCopy = (document.getElementById('keepCopy') || {}).checked !== false;
+    const keepCopy = true; // the recorded copy is what the voice separation runs on
     let stream;
     try {
       stream = await navigator.mediaDevices.getDisplayMedia({
@@ -743,21 +848,25 @@ export class SongStudio {
     const prevRef = this.lane.refAt;
     this.lane.refAt = (t) => { const g = Math.round(t / 0.01); const v = preview.get(g) ?? preview.get(g - 1) ?? preview.get(g + 1); return v == null ? NaN : v - cAbove55(this.songSa); };
     this.lane.message = '';
-    const stopBtn = h('button', { class: 'btn primary' }, '■ Finish capture');
+    const stopBtn = h('button', { class: 'btn primary' }, icon('stop', 14), 'Finish');
     const prog = h('span', { class: 'small' });
     this.status.innerHTML = ''; this.status.append(h('div', { class: 'callout' }, h('p', {}, 'Capturing. Let the song play to the end (or as far as you need), then press Finish. Don\'t switch the tab away from YouTube audio.'), h('div', { class: 'row' }, stopBtn, prog)));
     const startT = 0;
     if (!this.mel) { p.seek(startT); }
     p.setRate(1); p.play();
-    if (rec) { rec.ondataavailable = (e) => e.data.size && chunks.push(e.data); rec.start(1000); }
-    const progTimer = setInterval(() => { prog.textContent = `${fmtTime(p.time())} / ${fmtTime(p.duration())} · ${frames.size} frames`; }, 500);
+    // map recording time -> video time, so the separated melody can be placed on the video's timeline
+    const mapping = [];
+    let recStart = 0;
+    if (rec) { rec.ondataavailable = (e) => e.data.size && chunks.push(e.data); rec.start(1000); recStart = performance.now(); }
+    const mapTimer = setInterval(() => mapping.push({ rt: (performance.now() - recStart) / 1000, vt: p.time(), on: p.playing }), 100);
+    const progTimer = setInterval(() => { prog.textContent = `${fmtTime(p.time())} / ${fmtTime(p.duration())}`; }, 500);
     await new Promise((res) => {
       stopBtn.onclick = res;
       at.addEventListener('ended', res, { once: true });
       const endChk = setInterval(() => { if (p.duration() && p.time() >= p.duration() - 0.3) { clearInterval(endChk); res(); } }, 500);
       stopBtn.addEventListener('click', () => clearInterval(endChk));
     });
-    clearInterval(progTimer);
+    clearInterval(progTimer); clearInterval(mapTimer);
     p.pause();
     this.capturing = false;
     setMasterMuted(false);
@@ -781,13 +890,31 @@ export class SongStudio {
     if (this.mel) for (let g = 0; g < this.mel.cents.length; g++) { const tt = this.mel.t0 + g * this.mel.hop; const gi = Math.round(tt / 0.01); if (gi <= maxI) cents[gi] = this.mel.cents[g]; }
     // only overwrite stretches that were actually captured this time (keeps earlier captures)
     for (let g = 0; g < part.cents.length; g++) { const gi = minI + g; if (frames.has(gi) || frames.has(gi - 1) || frames.has(gi + 1)) cents[gi] = part.cents[g]; }
-    const mel = { hop: 0.01, t0: 0, cents };
-    await idbPut('melody', song.id + ':' + source, packMelody(mel));
+    let mel = { hop: 0.01, t0: 0, cents };
+    let savedCopy = false;
     if (copyBlob && copyBlob.size > 50000 && song.kind === 'youtube' && !song.hasCopy) {
       await idbPut('audio', song.id, copyBlob);
-      song.hasCopy = true; upsertSong(song);
-      toast('Saved a practice copy. Switch the source to "Practice copy" to transpose.', 'good', 6000);
+      song.hasCopy = true; savedCopy = true; upsertSong(song);
     }
+    // Better melody: separate the voice from the recorded audio, then place it on the video timeline.
+    if (copyBlob && copyBlob.size > 50000 && recStart) {
+      try {
+        const res = await analyzeBlob(copyBlob, (pr, stage) => this.setStatus(`${stage || 'Analysing…'} ${Math.round(pr * 100)}%`));
+        if (res.separated) {
+          const sepCents = placeOnVideo(res.mel, mapping, cents, frames, minI, maxCap);
+          if (sepCents) { mel = { hop: 0.01, t0: 0, cents: sepCents }; song[source + 'Separated'] = true; }
+          if (savedCopy) {
+            await idbPut('melody', song.id + ':audio', packMelody(res.mel));
+            await idbPut('audio', song.id + ':vocals', toI16(res.vocals));
+            song.audioSeparated = true;
+          }
+          upsertSong(song);
+        }
+      } catch (e) { console.warn('separation after capture failed', e); }
+      this.setStatus('');
+    }
+    await idbPut('melody', song.id + ':' + source, packMelody(mel));
+    if (savedCopy) toast('Also saved a practice copy of the song: switch the source to "Practice copy" to transpose it or hear the voice or backing track on their own.', 'good', 7000);
     if (firstCapture) { song[source + 'Sa'] = null; upsertSong(song); }
     if (this.song !== song || this.source !== source) return; // user moved on; data is saved for later
     this.mel = mel;
@@ -804,10 +931,13 @@ export class SongStudio {
     this.busy = true;
     this.setStatus('Analysing… 0%');
     try {
-      const mel = await analyzeBlob(blob, (p) => { if (this.song === song) this.setStatus(`Analysing… ${Math.round(p * 100)}%`); });
+      const { mel, vocals, separated } = await analyzeBlob(blob, (p, stage) => { if (this.song === song) this.setStatus(`${stage || 'Analysing…'} ${Math.round(p * 100)}%`); });
       await idbPut('melody', song.id + ':audio', packMelody(mel));
-      song.audioSa = null; upsertSong(song);
+      if (vocals) await idbPut('audio', song.id + ':vocals', toI16(vocals));
+      song.audioSa = null; song.audioSeparated = separated; upsertSong(song);
       if (this.song === song && this.source === 'audio') {
+        if (vocals && this.player && this.player.kind === 'audio') this.player.setVocals(vocals);
+        this.setStatus('');
         this.mel = mel;
         this.analyzeMelody(); this.renderInfo();
         toast(`Melody guide ready: ${this.phrases.length} lines found.`, 'good');
@@ -851,8 +981,8 @@ export class SongStudio {
     const t0 = Date.now();
     const name = h('input', { type: 'text', placeholder: 'Song name', value: 'Recorded song' });
     const timer = h('span', { class: 'mono' }, '0:00');
-    const stop = h('button', { class: 'btn primary' }, '■ Stop recording');
-    const box = h('div', { class: 'callout' }, h('p', {}, '⏺ Recording the other tab. Play the song there from the start. Press Stop when it ends.'), h('div', { class: 'row' }, name, timer, stop));
+    const stop = h('button', { class: 'btn primary' }, icon('stop', 14), 'Stop recording');
+    const box = h('div', { class: 'callout' }, h('p', {}, 'Recording the other tab. Play the song there from the start, and press Stop when it ends.'), h('div', { class: 'row' }, name, timer, stop));
     this.addBox.append(box);
     const iv = setInterval(() => (timer.textContent = fmtTime((Date.now() - t0) / 1000)), 500);
     await new Promise((res) => { stop.onclick = res; at.addEventListener('ended', res, { once: true }); });

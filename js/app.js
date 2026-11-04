@@ -1,4 +1,4 @@
-// App shell: routing, header controls, Today / Warm-up / Drills / Progress / Settings pages.
+// App shell: routing, header, Today, Practice hub, Progress, Settings, first-run tour.
 import { audioCtx, mic } from './audio.js';
 import { tanpura } from './sound.js';
 import { settings, saveSettings, onSettings, progress, streak, minutesOn, dayKey, resetProgress, songs, lastSong, getSong } from './store.js';
@@ -7,11 +7,22 @@ import { EXERCISES, WARMUP_ROUTINE, exText } from './exercises.js';
 import { ExercisePlayer } from './practice.js';
 import { SongStudio } from './song.js';
 import { RangeFinder } from './range.js';
+import { FreeSing } from './free.js';
 import { h, toast, ensureMic } from './ui.js';
+import { icon } from './icons.js';
 
 const $ = (s) => document.querySelector(s);
 const pages = {};
 let current = null;
+
+function hydrateIcons(root = document) {
+  root.querySelectorAll('[data-icon]').forEach((el) => { if (!el.firstChild || el.dataset.iconDone !== '1') { el.prepend(icon(el.dataset.icon, el.classList.contains('mark') ? 18 : 20)); el.dataset.iconDone = '1'; } });
+}
+function applyTheme() {
+  const t = settings.theme || 'auto';
+  if (t === 'auto') delete document.documentElement.dataset.theme; else document.documentElement.dataset.theme = t;
+  document.dispatchEvent(new Event('themechange'));
+}
 
 // ---------------------------------------------------------------------------
 // Header
@@ -19,11 +30,10 @@ function renderHeader() {
   const sa = saHzFrom(settings), m = hzToMidi(sa);
   const ind = isIndian(settings), n = westernName(Math.round(m));
   $('#saChip').textContent = `${ind ? 'Sa' : 'Key'} ${n}`;
-  $('#saChip').title = ind ? `Your Sa: ${n} (${sa.toFixed(1)} Hz) · ${kattaiName(Math.round(m) % 12)} · ${kaliSafedName(Math.round(m) % 12)}. Click to change.`
-    : `Key note for exercises: ${n} (${sa.toFixed(1)} Hz). Click to change.`;
-  $('#tanpuraBtn').textContent = tanpura.kind() === 'tanpura' ? '🪕 Tanpura' : '◎ Drone';
-  $('#tanpuraBtn').title = 'Drone on your key note: a steady reference pitch to sing against';
-  $('#tanpuraBtn').classList.toggle('on', tanpura.on);
+  $('#saChip').title = ind ? `Your Sa: ${n} (${sa.toFixed(1)} Hz) · ${kattaiName(Math.round(m) % 12)} · ${kaliSafedName(Math.round(m) % 12)}. Click to change.` : `Key note for exercises: ${n} (${sa.toFixed(1)} Hz). Click to change.`;
+  const tb = $('#tanpuraBtn');
+  tb.title = (tanpura.kind() === 'tanpura' ? 'Tanpura' : 'Drone') + ' on your key note: a steady pitch to sing against';
+  tb.classList.toggle('on', tanpura.on);
   $('#micBtn').classList.toggle('on', mic.running);
 }
 function setupHeader() {
@@ -44,7 +54,6 @@ function setupHeader() {
   });
   $('#saChip').addEventListener('click', () => (location.hash = '#settings'));
   document.addEventListener('mic-change', renderHeader);
-  // mic level meter
   const meter = $('#micLevel');
   const tick = () => { meter.style.setProperty('--lv', mic.running ? Math.min(1, mic.level * 12).toFixed(3) : 0); requestAnimationFrame(tick); };
   tick();
@@ -53,22 +62,19 @@ function setupHeader() {
     if (('saMidi' in patch || 'saFine' in patch || 'tanpuraFirst' in patch || 'droneSound' in patch || 'notation' in patch) && tanpura.on) {
       tanpura.start(current === 'song' && pages.song && pages.song.song ? pages.song.practiceSa : saHzFrom(settings), settings.tanpuraFirst);
     }
-    if ('notation' in patch || 'tuning' in patch) {
-      // rebuild style-dependent pages next time they're opened
-      if (pages.warm) { pages.warm.player.stop(); pages.warm = null; }
-      if (pages.drills) { pages.drills.player.stop(); pages.drills = null; }
-      if (pages.range) pages.range = null;
-      if (pages.song && pages.song.song) { pages.song.refreshKey(); pages.song.renderPhrases(); }
-    }
     if ('tanpuraVol' in patch) tanpura.setVolume(settings.tanpuraVol);
     if ('micSens' in patch) mic.setSensitivity(settings.micSens);
+    if ('notation' in patch || 'tuning' in patch) {
+      for (const k of ['player', 'warm', 'free', 'range']) { if (pages[k] && pages[k].stop) pages[k].stop(); pages[k] = null; }
+      if (pages.song && pages.song.song) { pages.song.refreshKey(); pages.song.renderPhrases(); }
+    }
   });
 }
 
 // ---------------------------------------------------------------------------
 // Today
 const WEAK_TO_DRILL = { highFlat: 'fiveNote', wobble: 'saHold', ornaments: 'meend', scoop: 'pitchMatch', accuracy: 'aroha', bias: 'saHold' };
-const WEAK_LABEL = { highFlat: 'flat high notes', wobble: 'unsteady held notes', ornaments: 'ornaments', scoop: 'scooping into notes', accuracy: 'overall accuracy', bias: 'pitch drift' };
+const WEAK_LABEL = { highFlat: 'flat high notes', wobble: 'unsteady held notes', ornaments: 'flattened ornaments', scoop: 'scooping into notes', accuracy: 'overall accuracy', bias: 'pitch drift' };
 function focusDrill() {
   const w = Object.entries(progress.weak || {}).sort((a, b) => b[1] - a[1])[0];
   if (w && w[1] > 0.5) return { id: WEAK_TO_DRILL[w[0]], why: `your recent takes show ${WEAK_LABEL[w[0]]}` };
@@ -76,147 +82,119 @@ function focusDrill() {
   return { id: rot[new Date().getDate() % rot.length], why: null };
 }
 function doneToday(pred) { const d = dayKey(new Date()); return progress.log.some((r) => dayKey(r.date) === d && pred(r)); }
-
+const TIPS = [
+  ['Sing in your key.', 'If a line strains, transpose it down. Original keys suit the original singer, not you.'],
+  ['Slow is fast.', 'Loop a hard line at 0.6× until it\'s clean, then speed up in steps.'],
+  ['Listen back.', 'Your take is saved after every pass. People hear their own singing more accurately on playback than while singing.'],
+  ['Wean off the line.', 'Once a line is green, try Blind mode so your ear does the work.'],
+  ['Lighter goes higher.', 'High notes get easier with less volume, not more.'],
+  ['Breathe low.', 'Belly and lower ribs expand; shoulders stay still.'],
+  ['Hum first.', 'Humming or lip trills before singing make the voice work with less effort.'],
+  ['Little and often.', 'Twenty minutes a day beats two hours on Sunday.'],
+];
+function greeting() { const h0 = new Date().getHours(); return h0 < 5 ? 'Good night' : h0 < 12 ? 'Good morning' : h0 < 18 ? 'Good afternoon' : 'Good evening'; }
+function signatureSVG() {
+  return `<svg class="signature" viewBox="0 0 460 140" aria-hidden="true">
+    <path class="band" d="M10 96 C 60 96, 70 54, 120 54 S 170 54, 190 80 S 240 112, 270 70 S 320 30, 360 38 S 420 64, 450 60"/>
+    <path class="voice" d="M10 100 C 40 102, 62 60, 96 58 C 118 57, 124 49, 134 56 C 150 66, 166 60, 184 76 C 206 98, 226 118, 254 82 C 268 64, 274 60, 282 63 C 300 46, 322 22, 352 38 C 368 46, 372 30, 384 44 C 400 60, 420 66, 448 58"/>
+    <circle class="dot" cx="448" cy="58" r="5"/></svg>`;
+}
+function tile({ href, ic, title, sub, hero = false }) {
+  return h('a', { class: 'tile' + (hero ? ' hero' : ''), href }, h('span', { class: 't-ic' }, icon(ic, 20)), h('span', { class: 't-body' }, h('span', { class: 't-title' }, title), h('span', { class: 't-sub' }, sub)), h('span', { class: 't-go' }, icon('chevron', 18)));
+}
 function renderToday() {
   const root = $('#page-today'); root.innerHTML = '';
   const st = streak(), today = minutesOn(dayKey(new Date()));
   let week = 0; for (let i = 0; i < 7; i++) { const d = new Date(); d.setDate(d.getDate() - i); week += minutesOn(dayKey(d)); }
   const song = getSong(lastSong.get()) || songs[0];
   const fd = focusDrill();
-  root.append(h('div', { class: 'hero' },
-    h('div', {}, h('h1', {}, 'Today\'s ' + term('practice', settings)), h('p', { class: 'muted' }, 'About 20 minutes. Short daily sessions beat long weekly ones, because spaced practice is how motor skills consolidate.')),
-    h('div', { class: 'stats' },
+  const hello = h('div', { class: 'hello', html: signatureSVG() });
+  hello.append(h('h1', {}, greeting() + '.'), h('p', { class: 'lead muted', style: 'font-size:1.12rem;margin:0' }, st ? `Day ${st} in a row. Keep the streak going.` : 'Pick anything below, or follow today\'s suggestions.'));
+  root.append(hello);
+  root.append(h('div', { class: 'grid3' },
+    tile({ href: '#practice/warmup', ic: 'breath', title: 'Warm up', sub: '8 minutes. Breath, sirens, scales, slides.', hero: true }),
+    tile({ href: '#songs', ic: 'songs', title: song ? 'Continue: ' + song.title.replace(/\s*\(.*\)\s*$/, '') : 'Learn a song', sub: song ? 'Loop a line, slow it down, sing against the original.' : 'Import any song and sing against its melody.' }),
+    tile({ href: '#practice/free', ic: 'wave', title: 'Free sing', sub: 'Sing anything and see your pitch live.' })));
+  if (!settings.saChosen) root.append(h('div', { class: 'callout row wrap spread', style: 'margin-top:16px' },
+    h('div', {}, h('strong', {}, 'Find your range first'), h('p', { class: 'small', style: 'margin:2px 0 0' }, 'Two minutes. It sets a comfortable key for every exercise and lets songs suggest a key that fits you.')),
+    h('a', { class: 'btn primary', href: '#practice/range' }, 'Find my range')));
+  const steps = [
+    { id: 'warm', ic: 'breath', title: 'Warm-up', mins: 8, href: '#practice/warmup', done: doneToday((r) => r.type === 'drill' && WARMUP_ROUTINE.includes(r.id)), what: 'Gets the voice moving before anything demanding.' },
+    { id: 'match', ic: 'target', title: 'Pitch matching', mins: 2, href: '#practice/pitchMatch', done: doneToday((r) => r.id === 'pitchMatch'), what: 'Hear a note, sing it back. Trains the ear-to-voice link behind most off-key singing.' },
+    { id: 'focus', ic: 'sparkle', title: exText(EXERCISES[fd.id], settings).name, mins: 3, href: '#practice/' + fd.id, done: doneToday((r) => r.id === fd.id), what: fd.why ? 'Because ' + fd.why + '.' : 'Today\'s technique focus.' },
+    { id: 'song', ic: 'songs', title: song ? song.title : 'A song', mins: 10, href: '#songs', done: doneToday((r) => r.type === 'song'), what: 'Two or three lines: listen at 0.75×, sing along, then try it muted.' },
+  ];
+  root.append(h('div', { class: 'section' }, h('h2', {}, 'Suggested for today'), h('span', { class: 'small muted' }, 'About 20 minutes · all optional')));
+  root.append(h('div', { class: 'list' }, ...steps.map((s) => h('a', { href: s.href, class: s.done ? 'done' : '' },
+    h('span', { class: 'li-ic' }, icon(s.done ? 'check' : s.ic, 18)),
+    h('span', { class: 'li-text' }, h('strong', {}, s.title), h('small', {}, s.what)),
+    h('span', { class: 'li-end' }, s.mins + ' min', icon('chevron', 16))))));
+  const [tt, td] = TIPS[(new Date().getDate() + new Date().getMonth()) % TIPS.length];
+  root.append(h('div', { class: 'grid2', style: 'margin-top:16px' },
+    h('div', { class: 'card', style: 'margin:0' }, h('div', { class: 'stats' },
       h('div', { class: 'stat' }, h('div', { class: 'stat-v' }, String(st)), h('div', { class: 'stat-l' }, 'day streak')),
       h('div', { class: 'stat' }, h('div', { class: 'stat-v' }, Math.round(today) + ' min'), h('div', { class: 'stat-l' }, 'today')),
-      h('div', { class: 'stat' }, h('div', { class: 'stat-v' }, Math.round(week) + ' min'), h('div', { class: 'stat-l' }, 'last 7 days')))));
-  if (!settings.saChosen) root.append(h('div', { class: 'callout setup' },
-    h('strong', {}, 'Welcome! First-time setup (2 minutes)'),
-    h('p', { class: 'small' }, 'What do you mostly want to sing? (You can change this any time in Settings.)'),
-    h('div', { class: 'style-pick' },
-      h('button', { class: 'btn' + (!isIndian(settings) ? ' on' : ''), onclick: () => { saveSettings({ notation: 'western' }); renderToday(); } }, 'Any song', h('small', {}, 'Pop, rock, soul, film, musicals… Notes named C D E.')),
-      h('button', { class: 'btn' + (isIndian(settings) ? ' on' : ''), onclick: () => { saveSettings({ notation: 'hindustani' }); renderToday(); } }, 'Indian classical / film', h('small', {}, 'Sargam (Sa Re Ga), tanpura, ragas, gamakas.'))),
-    h('ol', {}, h('li', {}, 'Use ', h('strong', {}, 'wired headphones'), ' (Bluetooth adds delay, and speakers leak into the mic).'),
-      h('li', {}, 'Run the ', h('a', { href: '#range' }, 'range test'), isIndian(settings) ? '. It picks a Sa (tonic) that fits your voice. Every exercise is built on it.' : '. It finds what\'s comfortable for your voice, picks a key for the exercises, and lets Song Studio suggest a key for each song.'),
-      h('li', {}, 'Allow the microphone when the browser asks.')),
-  ));
-  const steps = [
-    { title: 'Warm-up', mins: 8, href: '#warmup', done: doneToday((r) => r.type === 'drill' && WARMUP_ROUTINE.includes(r.id)), what: WARMUP_ROUTINE.map((id) => exText(EXERCISES[id], settings).name.split(':')[0]).join(', ') + '.' },
-    { title: 'Ear ↔ voice: pitch-match', mins: 2, href: '#drills/pitchMatch', done: doneToday((r) => r.id === 'pitchMatch'), what: 'Hear a note, then sing it. Trains the ear-to-voice link that most "off-key" singing comes down to.' },
-    { title: 'Focus drill: ' + exText(EXERCISES[fd.id], settings).name, mins: 3, href: '#drills/' + fd.id, done: doneToday((r) => r.id === fd.id), what: fd.why ? 'Chosen because ' + fd.why + '.' : 'Today\'s technique focus (changes daily until your takes show a specific weakness).' },
-    { title: 'Song: ' + (song ? song.title : 'add a song'), mins: 10, href: '#song', done: doneToday((r) => r.type === 'song'), what: 'Loop 2–3 lines. Listen at 0.75× with the guide tone, then sing along, then try Song muted.' },
-    { title: 'Cool-down', mins: 1, href: '#drills/cooldown', done: doneToday((r) => r.id === 'cooldown'), what: 'Soft descending hum.' },
-  ];
-  root.append(h('ol', { class: 'plan' }, ...steps.map((s) => h('li', { class: s.done ? 'done' : '' },
-    h('a', { href: s.href, class: 'plan-item' },
-      h('span', { class: 'check' }, s.done ? '✓' : ''),
-      h('span', { class: 'plan-text' }, h('strong', {}, s.title), h('small', {}, s.what)),
-      h('span', { class: 'mins' }, s.mins + ' min'))))));
-  root.append(h('div', { class: 'card' },
-    h('h3', {}, 'How to learn singing on your own'),
-    h('ol', { class: 'principles' },
-      h('li', {}, h('strong', {}, 'Sing in your key. '), 'Most "can\'t reach that note" problems are key problems. Transpose the song until it fits, then expand your range with exercises.'),
-      h('li', {}, h('strong', {}, 'Listen, then sing, then check. '), 'Hear the target, sing it, then compare (the pitch line, your recording). Feedback is what turns repetition into improvement.'),
-      h('li', {}, h('strong', {}, 'Slow and small. '), 'Loop one line at 0.6–0.75× until it\'s accurate, then speed up. Fast stuff (' + term('ornaments', settings) + ') is learned slowly first.'),
-      h('li', {}, h('strong', {}, 'Wean off the screen. '), 'Use the live line to learn, then switch to "Song muted" and Blind mode so your ear does the work.'),
-      h('li', {}, h('strong', {}, 'Record yourself. '), 'People judge their own singing poorly while singing. Listening back is one of the most effective tools.'),
-      h('li', {}, h('strong', {}, 'No pain. '), 'Strain, hoarseness or pain means stop. Hoarseness lasting over 2 weeks needs an ENT doctor.')),
-    h('a', { href: '#learn' }, 'The research behind this, and fixes for common problems →')));
-  root.append(appCard());
+      h('div', { class: 'stat' }, h('div', { class: 'stat-v' }, Math.round(week) + ' min'), h('div', { class: 'stat-l' }, 'this week')))),
+    h('div', { class: 'card tip-card', style: 'margin:0' }, h('span', { class: 'li-ic' }, icon('sparkle', 18)), h('div', {}, h('strong', {}, tt), h('p', { class: 'small' }, td)))));
 }
 
 // ---------------------------------------------------------------------------
-// Installable app (PWA) + sharing
-const APP_URL = 'https://kirubes27.github.io/swara-lab/';
-let deferredInstall = null;
-const isStandalone = () => matchMedia('(display-mode: standalone)').matches || navigator.standalone === true;
-const isIOS = () => /iPad|iPhone|iPod/.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
-async function shareApp() {
-  const data = { title: 'Swara Lab', text: 'A free singing trainer: sing any song and see exactly where your notes go off.', url: APP_URL };
-  try {
-    if (navigator.share) await navigator.share(data);
-    else { await navigator.clipboard.writeText(APP_URL); toast('Link copied: ' + APP_URL, 'good'); }
-  } catch {}
+// Practice hub and its sub-pages (#practice/<id>)
+const GROUPS = [
+  ['Foundations', ['breath', 'saHold', 'sirens', 'fiveNote', 'aroha', 'intervals', 'pitchMatch']],
+  ['Agility', ['alankar3', 'alankar4', 'runs', 'custom']],
+  ['Expression', ['meend', 'vibrato', 'kan', 'gamak', 'flips']],
+  ['Cool-down', ['cooldown']],
+];
+function drillCard(id) {
+  const d = id === 'custom' ? { name: 'Note Pad', what: 'Type any line of notes, such as a hard phrase from your song, and drill it slowly.' } : exText(EXERCISES[id], settings);
+  const mins = id === 'custom' ? '' : `${EXERCISES[id].mins} min`;
+  return h('a', { class: 'drill-card', href: '#practice/' + id }, h('strong', {}, d.name), h('small', {}, d.what.split('. ')[0].replace(/\.$/, '') + '.'), h('span', { class: 'd-meta' }, mins));
 }
-function appCard() {
-  const how = isStandalone() ? 'You\'re using the installed app. 👍'
-    : deferredInstall ? 'Install it to get an icon on your home screen or desktop. It opens like a normal app and works offline.'
-    : isIOS() ? 'On iPhone/iPad: tap the Share button in Safari, then "Add to Home Screen".'
-    : 'In Chrome or Edge: click the install icon in the address bar (or menu → "Install Swara Lab"). On Android: menu → "Add to Home screen".';
-  return h('div', { class: 'card app-card' },
-    h('img', { src: 'icons/icon-192.png', alt: '' }),
-    h('div', { class: 'grow' }, h('strong', {}, 'Get the app, share it with friends'), h('p', { class: 'small muted', style: 'margin:0' }, how, ' Free, no account. Everyone\'s songs and progress stay on their own device.')),
-    h('div', { class: 'row wrap' },
-      deferredInstall && !isStandalone() ? h('button', { class: 'btn primary', onclick: installApp }, '⬇ Install') : null,
-      h('button', { class: 'btn', onclick: shareApp }, '↗ Share')));
-}
-async function installApp() {
-  if (!deferredInstall) return;
-  deferredInstall.prompt();
-  try { await deferredInstall.userChoice; } catch {}
-  deferredInstall = null;
-  $('#installBtn').hidden = true;
-  if (current === 'today') renderToday();
-}
-function setupPWA() {
-  if ('serviceWorker' in navigator && window.isSecureContext) navigator.serviceWorker.register('sw.js').catch(() => {});
-  window.addEventListener('beforeinstallprompt', (e) => {
-    e.preventDefault(); deferredInstall = e;
-    $('#installBtn').hidden = false;
-    if (current === 'today') renderToday();
-  });
-  window.addEventListener('appinstalled', () => { deferredInstall = null; $('#installBtn').hidden = true; toast('Installed! Open Swara Lab from your home screen or apps list.', 'good'); });
-  $('#installBtn').addEventListener('click', installApp);
-}
-
-// ---------------------------------------------------------------------------
-// Warm-up
-function renderWarmup() {
-  const root = $('#page-warmup');
-  if (!pages.warm) {
-    root.innerHTML = '';
+function renderPractice(sub) {
+  const root = $('#page-practice');
+  for (const k of ['player', 'warm', 'free', 'range']) if (pages[k] && pages[k].stop && pages._sub !== sub) pages[k].stop();
+  pages._sub = sub;
+  root.innerHTML = '';
+  if (!sub) {
+    root.append(h('div', { class: 'page-head' }, h('h1', {}, 'Practice'), h('p', { class: 'lead' }, 'Everything is open. Warm up, explore your voice, or work on one skill at a time.')),
+      h('div', { class: 'grid3' },
+        tile({ href: '#practice/warmup', ic: 'breath', title: 'Warm-up routine', sub: `${WARMUP_ROUTINE.length} short steps · about 8 minutes`, hero: true }),
+        tile({ href: '#practice/free', ic: 'wave', title: 'Free sing', sub: 'An open pitch monitor. Sing anything.' }),
+        tile({ href: '#practice/range', ic: 'target', title: 'Find your range', sub: settings.rangeLowMidi != null ? `Currently ${westernName(settings.rangeLowMidi)}–${westernName(settings.rangeHighMidi)}` : 'Lowest and highest comfortable notes.' })));
+    for (const [g, ids] of GROUPS) root.append(h('div', { class: 'section' }, h('h2', {}, g)), h('div', { class: 'drill-grid' }, ...ids.map(drillCard)));
+    return;
+  }
+  const back = h('a', { class: 'back', href: '#practice' }, icon('back', 18), 'Practice');
+  if (sub === 'free') { pages.free = new FreeSing(root); return; }
+  if (sub === 'range') {
+    root.append(back);
+    const host = h('div'); root.append(host);
+    pages.range = new RangeFinder(host); return;
+  }
+  if (sub === 'warmup') {
     const list = h('ol', { class: 'steps' });
     const host = h('div', { class: 'grow' });
-    root.append(h('div', { class: 'split' }, h('aside', {}, h('h2', {}, 'Warm-up'), h('p', { class: 'muted small' }, '≈ 8 minutes. Do it before singing songs; voices warmed up gently strain less.'), list), host));
+    root.append(back, h('div', { class: 'split' }, h('aside', {}, h('h2', {}, 'Warm-up'), h('p', { class: 'muted small' }, 'About 8 minutes. Jump to any step.'), list), host));
     const player = new ExercisePlayer(host);
     let idx = 0;
-    const go = (i) => {
-      idx = i;
-      [...list.children].forEach((li, k) => li.classList.toggle('cur', k === i));
-      player.load(WARMUP_ROUTINE[i]);
-    };
-    WARMUP_ROUTINE.forEach((id, i) => list.append(h('li', { onclick: () => go(i) }, exText(EXERCISES[id], settings).name, h('small', {}, ` ${EXERCISES[id].mins} min`))));
-    player.onNext = () => { list.children[idx].classList.add('done'); if (idx + 1 < WARMUP_ROUTINE.length) go(idx + 1); else toast('Warm-up complete. Nice work. 🎉', 'good'); };
+    const go = (i) => { idx = i; [...list.children].forEach((li, k) => li.classList.toggle('cur', k === i)); player.load(WARMUP_ROUTINE[i]); };
+    WARMUP_ROUTINE.forEach((id, i) => list.append(h('li', { onclick: () => go(i) }, exText(EXERCISES[id], settings).name, h('small', {}, `${EXERCISES[id].mins}′`))));
+    player.onNext = () => { list.children[idx].classList.add('done'); if (idx + 1 < WARMUP_ROUTINE.length) go(idx + 1); else toast('Warm-up complete. Nice work.', 'good'); };
     player.onDone = () => list.children[idx].classList.add('done');
-    pages.warm = { player, go };
+    pages.warm = { stop: () => player.stop() };
     go(0);
+    return;
   }
-}
-
-// ---------------------------------------------------------------------------
-// Drills
-function renderDrills(sub) {
-  const root = $('#page-drills');
-  if (!pages.drills) {
-    root.innerHTML = '';
-    const grid = h('div', { class: 'drill-grid' });
-    const host = h('div', { class: 'drill-host' });
-    root.append(h('h2', {}, 'Drills'), h('p', { class: 'muted' }, 'Pick one. Each one gives feedback per note. Scale-based drills follow the scale you choose.'), grid, host);
-    const ids = Object.keys(EXERCISES).concat(['custom']);
-    for (const id of ids) {
-      const d = id === 'custom' ? { name: 'Note Pad: practise your own line', what: 'Type any line of notes, such as a hard phrase from your song, and drill it.' } : exText(EXERCISES[id], settings);
-      grid.append(h('a', { class: 'drill-card', href: '#drills/' + id }, h('strong', {}, d.name), h('small', {}, d.what.split('. ')[0].replace(/\.$/, '') + '.')));
-    }
+  if (EXERCISES[sub] || sub === 'custom') {
+    const host = h('div');
+    root.append(back, host);
     const player = new ExercisePlayer(host);
-    player.onNext = null;
-    pages.drills = { player, grid, host };
+    player.load(sub);
+    pages.player = { stop: () => player.stop() };
+    return;
   }
-  const { player, grid, host } = pages.drills;
-  if (sub && (EXERCISES[sub] || sub === 'custom')) {
-    [...grid.children].forEach((a) => a.classList.toggle('cur', a.getAttribute('href') === '#drills/' + sub));
-    if (player.id !== sub) player.load(sub);
-    host.style.display = '';
-    setTimeout(() => host.scrollIntoView({ behavior: 'smooth', block: 'start' }), 50);
-  } else host.style.display = player.id ? '' : 'none';
+  location.hash = '#practice';
 }
 
 // ---------------------------------------------------------------------------
@@ -224,8 +202,15 @@ function renderDrills(sub) {
 function renderProgress() {
   const root = $('#page-progress'); root.innerHTML = '';
   const log = progress.log;
-  root.append(h('h2', {}, 'Progress'));
-  if (!log.length) { root.append(h('p', { class: 'muted' }, 'Nothing yet. Your practice minutes, scores and note-by-note tuning tendencies appear here as you practise.')); return; }
+  root.append(h('div', { class: 'page-head' }, h('h1', {}, 'Progress'), h('p', { class: 'lead' }, 'How much you practise, how your scores move, and where each note tends to land.')));
+  if (!log.length) { root.append(h('div', { class: 'card flat' }, h('p', { class: 'muted', style: 'margin:0' }, 'Nothing yet. Minutes, scores and your tuning map appear here as you practise.'))); return; }
+  const st = streak(); let week = 0; for (let i = 0; i < 7; i++) { const d = new Date(); d.setDate(d.getDate() - i); week += minutesOn(dayKey(d)); }
+  const total = log.reduce((x, r) => x + (r.minutes || 0), 0);
+  root.append(h('div', { class: 'card' }, h('div', { class: 'stats' },
+    h('div', { class: 'stat' }, h('div', { class: 'stat-v' }, String(st)), h('div', { class: 'stat-l' }, 'day streak')),
+    h('div', { class: 'stat' }, h('div', { class: 'stat-v' }, Math.round(week) + ' min'), h('div', { class: 'stat-l' }, 'this week')),
+    h('div', { class: 'stat' }, h('div', { class: 'stat-v' }, (total / 60).toFixed(1) + ' h'), h('div', { class: 'stat-l' }, 'all time')),
+    h('div', { class: 'stat' }, h('div', { class: 'stat-v' }, String(log.filter((r) => r.type === 'song').length)), h('div', { class: 'stat-l' }, 'song takes')))));
   // 28-day minutes
   const days = [];
   for (let i = 27; i >= 0; i--) { const d = new Date(); d.setDate(d.getDate() - i); days.push({ d, m: minutesOn(dayKey(d)) }); }
@@ -265,7 +250,7 @@ function renderProgress() {
           h('span', { class: 'dtrack' }, h('span', { class: 'dzero' }), h('span', { class: 'dbar ' + (r.b < 0 ? 'flat' : 'sharp'), style: r.b < 0 ? `right:50%;width:${w}%` : `left:50%;width:${w}%` })),
           h('span', { class: 'dval mono' }, (r.b > 0 ? '+' : '') + Math.round(r.b) + '¢'));
       })),
-      h('div', { class: 'row small muted spread' }, h('span', {}, '◀ flat'), h('span', {}, 'sharp ▶'))));
+      h('div', { class: 'row small muted spread' }, h('span', {}, 'flat'), h('span', {}, 'sharp'))));
   }
   // songs
   const songRows = songs.filter((s) => s.best && Object.keys(s.best).length);
@@ -295,7 +280,12 @@ function renderSettings() {
   const styleSel = h('select', { onchange: (e) => { saveSettings({ notation: e.target.value }); renderSettings(); } },
     ...[['western', 'General: any song (note names C D E, scale degrees 1–7)'], ['hindustani', 'Indian, Hindustani sargam (S R G m P D N)'], ['carnatic', 'Indian, Carnatic (S R1 R2 G2 G3 M1 …)']]
       .map(([v, l]) => h('option', { value: v, selected: settings.notation === v }, l)));
-  root.append(h('h2', {}, 'Settings'),
+  const themeSeg = h('div', { class: 'seg' }, ...[['auto', 'Automatic'], ['light', 'Light'], ['dark', 'Dark']].map(([v, l]) => h('button', { class: (settings.theme || 'auto') === v ? 'on' : '', onclick: () => { saveSettings({ theme: v }); applyTheme(); renderSettings(); } }, l)));
+  root.append(h('div', { class: 'page-head' }, h('h1', {}, 'Settings')),
+    h('div', { class: 'card form' },
+      h('h3', {}, 'Appearance'),
+      field('Theme', themeSeg),
+    ),
     h('div', { class: 'card form' },
       h('h3', {}, 'Music style'),
       field('Style', styleSel, 'Changes note names, scales, drone and exercise wording. Any song works in either style; pick whichever way of naming notes you think in.'),
@@ -327,42 +317,102 @@ function renderSettings() {
       field('Extra latency compensation', range('latencyMs', 0, 400, 10, (v) => v + ' ms'), 'If you\'re always reported "behind" with the same amount, set it here (Bluetooth: try 150–250 ms).'),
     ),
     h('div', { class: 'card form' },
-      h('h3', {}, 'Data'),
-      h('p', { class: 'small muted' }, 'Everything (songs, melodies, recordings, progress) stays in this browser. Nothing is uploaded.'),
-      h('button', { class: 'btn', onclick: () => { const b = new Blob([JSON.stringify({ settings, progress, songs }, null, 1)], { type: 'application/json' }); const a = h('a', { href: URL.createObjectURL(b), download: 'swara-lab-backup.json' }); a.click(); } }, 'Export backup (JSON)')),
+      h('h3', {}, 'Data & about'),
+      h('p', { class: 'small muted' }, 'Everything (songs, melodies, recordings, progress) stays in this browser. Nothing is uploaded. Swara Lab is free and open source.'),
+      h('div', { class: 'row wrap' },
+        h('button', { class: 'btn', onclick: () => { const b = new Blob([JSON.stringify({ settings, progress, songs }, null, 1)], { type: 'application/json' }); const a = h('a', { href: URL.createObjectURL(b), download: 'swara-lab-backup.json' }); a.click(); } }, icon('download', 16), 'Export backup'),
+        h('button', { class: 'btn', onclick: () => showTour() }, icon('sparkle', 16), 'Show the tour'),
+        h('a', { class: 'btn', href: 'https://github.com/kirubes27/swara-lab', target: '_blank', rel: 'noopener' }, icon('globe', 16), 'Source on GitHub'))),
   );
 }
 
 // ---------------------------------------------------------------------------
+// First-run tour (re-openable from Settings)
+const TOUR_ART = {
+  line: `<svg viewBox="0 0 500 160" preserveAspectRatio="none"><g stroke="var(--lane-grid)" stroke-width="1">${[30, 55, 80, 105, 130].map((y) => `<line x1="0" x2="500" y1="${y}" y2="${y}"/>`).join('')}</g>
+    <path d="M0 110 C 60 110, 80 60, 140 60 S 200 60, 230 90 S 290 120, 320 80 S 380 40, 420 46 S 480 70, 500 66" fill="none" stroke="var(--lane-ref)" stroke-width="16" stroke-linecap="round"/>
+    <path d="M0 114 C 50 116, 78 66, 122 63 C 150 61, 160 55, 172 62 C 190 72, 208 68, 226 86 C 246 106, 266 122, 296 90 C 310 74, 318 70, 326 72" fill="none" stroke="var(--good)" stroke-width="4" stroke-linecap="round"/>
+    <path d="M326 72 C 344 50, 366 30, 396 44" fill="none" stroke="var(--ok)" stroke-width="4" stroke-linecap="round"/><circle cx="396" cy="44" r="7" fill="var(--accent)"/></svg>`,
+  song: `<svg viewBox="0 0 500 160" preserveAspectRatio="none">${Array.from({ length: 62 }, (_, i) => { const x = 8 + i * 7.9, hgt = 14 + 46 * Math.abs(Math.sin(i * 0.55) * Math.cos(i * 0.17)); return `<rect x="${x}" y="${120 - hgt}" width="4" height="${hgt}" rx="2" fill="var(--surface3)"/>`; }).join('')}
+    <path d="M10 70 L 60 70 C 70 70, 72 50, 84 50 L 140 50 M 168 62 L 226 62 C 236 62, 238 40, 250 40 L 300 40 M 330 56 L 380 56 C 392 56, 396 76, 408 76 L 490 76" fill="none" stroke="var(--accent)" stroke-width="4" stroke-linecap="round"/>
+    <rect x="160" y="18" width="150" height="118" rx="10" fill="var(--lane-loop)" stroke="var(--accent)" stroke-opacity=".4"/></svg>`,
+  explore: `<svg viewBox="0 0 500 160">${[['Warm-up', 30, 'var(--accent)'], ['Free sing', 180, 'var(--info)'], ['Drills', 330, 'var(--good)']].map(([t, x, c]) => `<g><rect x="${x}" y="28" width="140" height="104" rx="18" fill="var(--surface)"/><circle cx="${x + 30}" cy="58" r="14" fill="${c}" opacity=".18"/><circle cx="${x + 30}" cy="58" r="5" fill="${c}"/><text x="${x + 18}" y="112" font-family="-apple-system,system-ui,sans-serif" font-size="15" font-weight="600" fill="var(--text)">${t}</text></g>`).join('')}</svg>`,
+  phones: `<svg viewBox="0 0 500 160"><g fill="none" stroke="var(--text2)" stroke-width="5" stroke-linecap="round"><path d="M190 110 v-24 a60 60 0 0 1 120 0 v24"/><rect x="176" y="98" width="30" height="44" rx="10" fill="var(--accent)" stroke="none"/><rect x="294" y="98" width="30" height="44" rx="10" fill="var(--accent)" stroke="none"/></g></svg>`,
+};
+function showTour() {
+  document.querySelector('.tour')?.remove();
+  let i = 0;
+  const slides = [
+    { art: 'line', title: 'See your voice.', text: 'As you sing, your voice is drawn as a line over the target melody: green when you\'re on the note, amber when close, red when off. You can see exactly where a note goes sharp, flat or wanders.' },
+    { art: 'song', title: 'Learn any song.', text: 'Import a song (or paste a YouTube link). Swara Lab pulls out the vocal melody, splits it into lines and writes out the notes. Loop a line, slow it down, transpose it to your key, and sing against it.' },
+    { art: 'explore', title: 'Practise your way.', text: 'Warm-ups, drills for vibrato, runs, slides and high notes, and a free-sing pitch monitor. There are no levels or locks. Explore whatever you like, in any order.' },
+    { art: null, title: 'What do you mostly sing?', text: 'This only changes how notes are named. Any song works either way, and you can switch in Settings.', pick: true },
+    { art: 'phones', title: 'Two things before you start.', text: 'Wired headphones work best: speakers leak into the mic and Bluetooth adds delay. When the browser asks, allow the microphone. Nothing you sing is uploaded; everything stays on this device.', last: true },
+  ];
+  const box = h('div', { class: 'tour', role: 'dialog', 'aria-modal': 'true', 'aria-label': 'Welcome tour' });
+  const card = h('div', { class: 'tour-card' });
+  box.append(card);
+  const done = (to) => { saveSettings({ toured: true }); box.remove(); if (to) location.hash = to; };
+  const render = () => {
+    const s = slides[i];
+    card.innerHTML = '';
+    const slide = h('div', { class: 'tour-slide' });
+    if (s.art) slide.append(h('div', { class: 'tour-art', html: TOUR_ART[s.art] }));
+    slide.append(h('h2', {}, s.title), h('p', {}, s.text));
+    if (s.pick) slide.append(h('div', { class: 'style-pick' },
+      h('button', { class: 'btn' + (!isIndian(settings) ? ' on' : ''), onclick: () => { saveSettings({ notation: 'western' }); render(); } }, 'Any song', h('small', {}, 'Pop, rock, soul, film, musicals. Notes named C D E.')),
+      h('button', { class: 'btn' + (isIndian(settings) ? ' on' : ''), onclick: () => { saveSettings({ notation: 'hindustani' }); render(); } }, 'Indian classical / film', h('small', {}, 'Sargam (Sa Re Ga), tanpura, ragas, gamakas.'))));
+    const dots = h('div', { class: 'dots' }, ...slides.map((_, k) => h('i', { class: k === i ? 'on' : '' })));
+    const nextBtns = s.last
+      ? h('div', { class: 'row' }, h('button', { class: 'btn', onclick: () => done('#practice/range') }, 'Find my range'), h('button', { class: 'btn primary', onclick: () => done() }, 'Start exploring'))
+      : h('div', { class: 'row' }, i > 0 ? h('button', { class: 'btn ghost', onclick: () => { i--; render(); } }, 'Back') : null, h('button', { class: 'btn primary', onclick: () => { i++; render(); } }, 'Continue'));
+    card.append(h('button', { class: 'btn ghost small tour-skip', onclick: () => done() }, 'Skip'), slide, h('div', { class: 'tour-foot' }, dots, nextBtns));
+  };
+  render();
+  document.body.append(box);
+  box.addEventListener('keydown', (e) => { if (e.key === 'Escape') done(); });
+}
+
+// ---------------------------------------------------------------------------
+// Earlier versions registered a service worker; remove it so nobody gets a stale cached copy.
+function removeOldServiceWorker() {
+  if (!('serviceWorker' in navigator)) return;
+  navigator.serviceWorker.getRegistrations().then((rs) => rs.forEach((r) => r.unregister())).catch(() => {});
+  if (window.caches) caches.keys().then((ks) => ks.filter((k) => k.startsWith('swaralab')).forEach((k) => caches.delete(k))).catch(() => {});
+}
+
+// ---------------------------------------------------------------------------
 // Router
-const ROUTES = ['today', 'warmup', 'song', 'drills', 'range', 'learn', 'progress', 'settings'];
+const ALIAS = { song: 'songs', warmup: 'practice/warmup', drills: 'practice', range: 'practice/range' };
 function route() {
-  const [page, sub] = (location.hash.slice(1) || 'today').split('/');
-  const p = ROUTES.includes(page) ? page : 'today';
-  if (current === 'song' && p !== 'song' && pages.song) pages.song.deactivate();
-  if (current && current !== p) {
-    if (pages.warm) pages.warm.player.stop();
-    if (pages.drills) pages.drills.player.stop();
-    pages.range && pages.range.stop();
-  }
-  current = p;
-  document.querySelectorAll('.page').forEach((el) => (el.hidden = el.id !== 'page-' + p));
-  document.querySelectorAll('nav a').forEach((a) => a.classList.toggle('active', a.getAttribute('href') === '#' + p));
-  if (p === 'today') renderToday();
-  if (p === 'warmup') renderWarmup();
-  if (p === 'drills') renderDrills(sub);
-  if (p === 'song') { if (!pages.song) pages.song = new SongStudio($('#page-song')); pages.song.activate(); pages.song.syncMicBtn(); }
-  if (p === 'range') { if (!pages.range) pages.range = new RangeFinder($('#page-range')); else pages.range.renderOut(); }
-  if (p === 'progress') renderProgress();
-  if (p === 'settings') renderSettings();
+  let hash = location.hash.slice(1) || 'today';
+  let [page, sub] = hash.split('/');
+  if (page === 'drills' && sub) { location.replace('#practice/' + sub); return; }
+  if (ALIAS[page]) { location.replace('#' + ALIAS[page]); return; }
+  const ROUTES = ['today', 'songs', 'practice', 'progress', 'learn', 'settings'];
+  if (!ROUTES.includes(page)) page = 'today';
+  const pageId = page === 'songs' ? 'song' : page;
+  if (current === 'song' && pageId !== 'song' && pages.song) pages.song.deactivate();
+  if (current === 'practice' && pageId !== 'practice') for (const k of ['player', 'warm', 'free', 'range']) if (pages[k] && pages[k].stop) pages[k].stop();
+  current = pageId;
+  document.querySelectorAll('.page').forEach((el) => (el.hidden = el.id !== 'page-' + pageId));
+  document.querySelectorAll('.nav a, .tabbar a').forEach((a) => a.classList.toggle('active', a.getAttribute('href') === '#' + page));
+  document.title = page === 'today' ? 'Swara Lab · singing trainer' : `${page[0].toUpperCase() + page.slice(1)} · Swara Lab`;
+  if (pageId === 'today') renderToday();
+  if (pageId === 'practice') renderPractice(sub);
+  if (pageId === 'song') { if (!pages.song) pages.song = new SongStudio($('#page-song')); pages.song.activate(); pages.song.syncMicBtn(); }
+  if (pageId === 'progress') renderProgress();
+  if (pageId === 'settings') renderSettings();
   window.scrollTo(0, 0);
 }
 
+applyTheme();
+hydrateIcons();
 setupHeader();
-setupPWA();
+removeOldServiceWorker();
 renderHeader();
 window.swaraLab = { pages }; // handy for debugging from the console
 window.addEventListener('hashchange', route);
 route();
-// Unlock audio on first interaction (browser autoplay policy).
+if (!settings.toured) setTimeout(showTour, 300);
 window.addEventListener('pointerdown', () => audioCtx(), { once: true });

@@ -75,7 +75,7 @@ export const songs = lsGet('songs', DEFAULT_SONGS);
 export function saveSongs() { lsSet('songs', songs); }
 export function getSong(id) { return songs.find((s) => s.id === id); }
 export function upsertSong(s) { const i = songs.findIndex((x) => x.id === s.id); if (i >= 0) songs[i] = Object.assign(songs[i], s); else songs.push(s); saveSongs(); return getSong(s.id); }
-export function removeSong(id) { const i = songs.findIndex((x) => x.id === id); if (i >= 0) songs.splice(i, 1); saveSongs(); idbDel('melody', id + ':youtube'); idbDel('melody', id + ':audio'); idbDel('audio', id); }
+export function removeSong(id) { const i = songs.findIndex((x) => x.id === id); if (i >= 0) songs.splice(i, 1); saveSongs(); idbDel('melody', id + ':youtube'); idbDel('melody', id + ':audio'); idbDel('audio', id); idbDel('audio', id + ':vocals'); }
 export const lastSong = { get: () => lsGet('lastSong', DEFAULT_SONGS[0].id), set: (id) => lsSet('lastSong', id) };
 
 // ---- IndexedDB ---------------------------------------------------------------------

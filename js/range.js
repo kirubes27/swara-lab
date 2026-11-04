@@ -18,13 +18,13 @@ export class RangeFinder {
     this.live = h('div', { class: 'range-live' }, '–');
     this.kb = h('canvas', { class: 'keyboard' });
     this.out = h('div', { class: 'range-out' });
-    this.btnLow = h('button', { class: 'btn primary', onclick: () => this.run('low') }, '1 · Find my lowest note');
-    this.btnHigh = h('button', { class: 'btn primary', onclick: () => this.run('high') }, '2 · Find my highest note');
+    this.btnLow = h('button', { class: 'btn primary', onclick: () => this.run('low') }, '1. Lowest note');
+    this.btnHigh = h('button', { class: 'btn primary', onclick: () => this.run('high') }, '2. Highest note');
     r.append(
+      h('div', { class: 'page-head' }, h('h1', {}, isIndian(settings) ? 'Find your range and your Sa' : 'Find your range'),
+        h('p', { class: 'lead' }, 'Sing on a relaxed "ah" or hum. Slide slowly to your lowest note and hold it for a second, then do the same for your highest. Only steady notes count, so croaks and squeaks don\'t. Stop before any strain.')),
       h('div', { class: 'card' },
-        h('h2', {}, isIndian(settings) ? 'Find your range and your Sa' : 'Find your vocal range'),
-        h('p', {}, 'Sing on a relaxed "aa" or hum. ', h('strong', {}, 'Slide slowly'), ' towards your lowest (then highest) note and ', h('strong', {}, 'hold it for a second'), '. Only notes you can hold steadily count. That keeps out croaks and squeaks, and it\'s the range you can actually use in songs. Stop before any strain.'),
-        h('div', { class: 'row wrap' }, this.btnLow, this.btnHigh, h('button', { class: 'btn', onclick: () => this.stop() }, 'Stop')),
+        h('div', { class: 'row wrap' }, this.btnLow, this.btnHigh, h('button', { class: 'btn ghost', onclick: () => this.stop() }, 'Stop')),
         this.live, this.kb, this.out,
       ),
     );
@@ -71,7 +71,7 @@ export class RangeFinder {
     }
     this.drawKb(f.hz > 0 ? hzToMidi(f.hz) : null);
   }
-  flash(note) { this.live.textContent = `✓ held ${westernName(note)}`; }
+  flash(note) { this.live.textContent = `Held ${westernName(note)}`; }
   drawKb(cur = null) {
     const c = this.kb, dpr = Math.min(2, devicePixelRatio || 1);
     c.width = c.clientWidth * dpr; c.height = c.clientHeight * dpr;

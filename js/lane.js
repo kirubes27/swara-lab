@@ -1,5 +1,5 @@
 // Canvas renderers: the scrolling pitch lane and a whole-song overview strip.
-import { ET_CENTS, JUST_CENTS, SWARA_SHORT, CARNATIC, WESTERN, hzToMidi, wrapCents } from './music.js';
+import { ET_CENTS, JUST_CENTS, SWARA_SHORT, CARNATIC, WESTERN, hzToMidi, wrapCents, nearestSwara } from './music.js';
 
 function cssVars(el) {
   const cs = getComputedStyle(el);
@@ -37,7 +37,9 @@ export class PitchLane {
     this.live = null;             // {c, dev} current pitch readout
     this.theme = null;
     this.message = '';
+    this.nearestColor = false;    // free singing: colour by distance to the nearest note
     new ResizeObserver(() => { this.theme = null; }).observe(canvas);
+    document.addEventListener('themechange', () => { this.theme = null; });
     matchMedia('(prefers-color-scheme: dark)').addEventListener?.('change', () => { this.theme = null; });
   }
   setRange(lo, hi, instant = false) {
@@ -154,11 +156,10 @@ export class PitchLane {
       if (p && u.t - p.t < 0.09) {
         let col = T.text;
         const r = this.refAt ? this.refAt(u.t) : NaN;
-        if (!isNaN(r)) {
-          let d = u.c - r; if (this.octaveFree) d = wrapCents(d);
-          const a = Math.abs(d);
-          col = a <= this.tol ? T.good : a <= this.tol * 2.2 ? T.ok : T.bad;
-        }
+        let d = NaN;
+        if (!isNaN(r)) { d = u.c - r; if (this.octaveFree) d = wrapCents(d); }
+        else if (this.nearestColor) d = nearestSwara(u.c, this.tuning).dev;
+        if (!isNaN(d)) { const a = Math.abs(d); col = a <= this.tol ? T.good : a <= this.tol * 2.2 ? T.ok : T.bad; }
         g.strokeStyle = col;
         g.beginPath(); g.moveTo(X(p.t), Y(p.c)); g.lineTo(X(u.t), Y(u.c)); g.stroke();
       }
@@ -189,6 +190,7 @@ export class Overview {
     this.c = canvas; this.g = canvas.getContext('2d');
     this.duration = 0; this.mel = null; this.phrases = []; this.loop = null; this.now = 0; this.theme = null;
     this.onSeek = onSeek; this.onLoop = onLoop; this.capture = null; // live capture preview {cents:Map}
+    document.addEventListener('themechange', () => { this.theme = null; this.draw(); });
     let down = null;
     const tAt = (e) => { const r = canvas.getBoundingClientRect(); return Math.max(0, Math.min(1, (e.clientX - r.left) / r.width)) * this.duration; };
     canvas.addEventListener('pointerdown', (e) => { if (!this.duration) return; down = { t: tAt(e), x: e.clientX }; canvas.setPointerCapture(e.pointerId); });
