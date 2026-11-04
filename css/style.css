@@ -415,3 +415,12 @@ svg.trend .trend-dot { fill: var(--accent); stroke: var(--surface); stroke-width
   .brand span.word { display: none; }
 }
 @media (prefers-reduced-motion: reduce) { *, *::before, *::after { animation: none !important; transition: none !important; } .signature path { stroke-dashoffset: 0; } }
+
+/* progress panel for long analysis jobs */
+.progress { display: flex; gap: 14px; align-items: flex-start; padding: 16px 18px; margin: 12px 0; border-radius: var(--r); background: var(--accent-soft); }
+.spinner { width: 22px; height: 22px; border-radius: 50%; border: 2.5px solid color-mix(in srgb, var(--accent) 25%, transparent); border-top-color: var(--accent); animation: spin .9s linear infinite; flex: none; margin-top: 1px; }
+@keyframes spin { to { transform: rotate(360deg); } }
+.p-stage { font-weight: 560; margin-bottom: 8px; }
+.p-bar { height: 6px; border-radius: 6px; background: color-mix(in srgb, var(--accent) 15%, transparent); overflow: hidden; margin-bottom: 8px; }
+.p-bar i { display: block; height: 100%; width: 0; background: var(--accent); border-radius: 6px; transition: width .4s var(--ease); }
+.p-note { line-height: 1.4; }

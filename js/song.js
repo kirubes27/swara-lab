@@ -93,12 +93,19 @@ class AudioPlayer {
     this.kind = 'audio'; this.blob = blob; this.factor = 1; this.r = 1; this.st = 0; this.cur = 'mix|0'; this.onState = onState;
     this.a = new Audio(); this.a.preload = 'auto';
     this.a.preservesPitch = true; this.a.mozPreservesPitch = true; this.a.webkitPreservesPitch = true;
-    this.url = URL.createObjectURL(blob); this.a.src = this.url;
+    this.url = URL.createObjectURL(blob);
+    this.ready = (async () => {
+      // MediaRecorder WebM files have no duration or seek index; convert them to WAV so seeking works.
+      if (/webm|ogg/.test(blob.type || '')) {
+        try { const buf = await this.decoded(); URL.revokeObjectURL(this.url); this.url = URL.createObjectURL(audioBufferToWav(buf)); } catch {}
+      }
+      this.a.src = this.url;
+      await new Promise((res) => { this.a.addEventListener('loadedmetadata', res, { once: true }); this.a.addEventListener('error', res, { once: true }); });
+    })();
     const emit = (st) => { if (!this.dead && onState) onState(st, this); };
     this.a.addEventListener('play', () => emit(1));
     this.a.addEventListener('pause', () => emit(2));
     this.a.addEventListener('ended', () => emit(0));
-    this.ready = new Promise((res) => { this.a.addEventListener('loadedmetadata', () => res(), { once: true }); this.a.addEventListener('error', () => res(), { once: true }); });
   }
   get playing() { return !this.a.paused && !this.a.ended; }
   play() { this.a.play().catch(() => {}); }
@@ -157,16 +164,19 @@ class AudioPlayer {
 }
 
 // ---------------------------------------------------------------------------
-const MODEL_URL = new URL('../models/spleeter-vocals.onnx', import.meta.url).href;
+const MODELS = { kim: new URL('../models/kim-vocal-2.onnx', import.meta.url).href, spleeter: new URL('../models/spleeter-vocals.onnx', import.meta.url).href };
+let activeSep = null; // the running separation worker (to ask it for the faster model)
+export function useFastModel() { if (activeSep) activeSep.postMessage({ fast: true }); }
 function runWorker(url, msg, transfer, onProgress) {
   return new Promise((res, rej) => {
     const w = new Worker(new URL(url, import.meta.url), { type: 'module' });
+    if (url.includes('sep-worker')) activeSep = w;
     w.onmessage = (e) => {
       if (e.data.progress != null) onProgress && onProgress(e.data.progress, e.data.stage);
-      if (e.data.done) { w.terminate(); res(e.data); }
-      if (e.data.error) { w.terminate(); rej(new Error(e.data.error)); }
+      if (e.data.done) { w.terminate(); if (activeSep === w) activeSep = null; res(e.data); }
+      if (e.data.error) { w.terminate(); if (activeSep === w) activeSep = null; rej(new Error(e.data.error)); }
     };
-    w.onerror = (e) => { w.terminate(); rej(new Error(e.message || 'worker failed')); };
+    w.onerror = (e) => { w.terminate(); if (activeSep === w) activeSep = null; rej(new Error(e.message || 'worker failed')); };
     w.postMessage(msg, transfer);
   });
 }
@@ -178,8 +188,8 @@ async function analyzeBlob(blob, onProgress) {
   try {
     const b44 = await renderRate(buf, 1, 44100);
     const L = b44.getChannelData(0).slice(), R = (b44.numberOfChannels > 1 ? b44.getChannelData(1) : b44.getChannelData(0)).slice();
-    const r = await runWorker('./sep-worker.js', { L, R, modelUrl: MODEL_URL }, [L.buffer, R.buffer], onProgress);
-    return { mel: r.mel, vocals: r.vocals, separated: true };
+    const r = await runWorker('./sep-worker.js', { L, R, models: MODELS }, [L.buffer, R.buffer], onProgress);
+    return { mel: r.mel, vocals: r.vocals, separated: true, model: r.model };
   } catch (err) {
     console.warn('vocal separation unavailable, using mix-based tracking:', err);
     toast('Voice separation isn\'t available in this browser, so the melody is traced from the full mix (less accurate).', 'info', 7000);
@@ -326,7 +336,7 @@ export class SongStudio {
     );
   }
   async setSound(mode) {
-    if (!(this.player && this.player.kind === 'audio')) { toast('Voice-only and backing track work on imported songs and practice copies.', 'info'); this.syncSoundSeg(); return; }
+    if (!(this.player && this.player.kind === 'audio')) { toast(this.song && this.song.hasCopy ? 'Switch the source to "Recorded copy" (above) to hear the voice or the backing track on their own.' : 'Voice only and Backing need the song\'s audio: import an audio file, or capture the YouTube song once (that saves a recorded copy).', 'info', 7000); this.syncSoundSeg(); return; }
     if (!this.player.vocals) { toast('Analyse the song first. That step separates the voice from the music.', 'info'); this.syncSoundSeg(); return; }
     this.setStatus(mode === 'mix' ? '' : 'Preparing ' + (mode === 'vocals' ? 'the voice track' : 'the backing track') + '…');
     await this.player.setSound(mode);
@@ -401,8 +411,8 @@ export class SongStudio {
       this.player = new YTPlayer(holder, s.videoId, {
         onState: (st) => this.onState(st),
         onError: (code) => {
-          const why = code === 101 || code === 150 ? 'YouTube won\'t play this video inside other sites (the owner may block embedding, or it\'s unavailable here).' : code === 100 ? 'This video was not found or is private.' : 'YouTube error ' + code + '.';
-          this.playerBox.append(h('div', { class: 'warn' }, why + ' Workaround: ', h('a', { href: 'https://www.youtube.com/watch?v=' + s.videoId, target: '_blank', rel: 'noopener' }, 'open it on YouTube ↗'), ', then come back and use "+ Add song → Record from another tab". You\'ll get a practice copy you can loop, slow down and transpose.'));
+          const why = code === 101 || code === 150 ? 'YouTube stopped this video from playing here. Usually the owner blocks playing it on other sites. If YouTube says "too many devices streaming", close your other YouTube tabs and reload.' : code === 100 ? 'This video was not found or is private.' : 'YouTube error ' + code + '.';
+          this.playerBox.append(h('div', { class: 'warn' }, why + ' Workaround: ', h('a', { href: 'https://www.youtube.com/watch?v=' + s.videoId, target: '_blank', rel: 'noopener' }, 'open it on YouTube ↗'), ', then come back and use "+ Add song → Record from another tab". You\'ll get a copy you can loop, slow down and transpose.'));
         },
         onReady: (p) => { if (!s.titleFetched) { const t = p.title(); if (t) { s.title = t; s.titleFetched = true; upsertSong(s); this.refreshSelect(); } } },
       });
@@ -479,7 +489,7 @@ export class SongStudio {
     if (s.kind === 'youtube' && s.hasCopy) {
       const sw = h('div', { class: 'seg' },
         h('button', { class: 'btn small' + (this.source === 'youtube' ? ' on' : ''), onclick: () => this.switchSource('youtube') }, 'YouTube video'),
-        h('button', { class: 'btn small' + (this.source === 'audio' ? ' on' : ''), onclick: () => this.switchSource('audio') }, 'Practice copy (transposable)'));
+        h('button', { class: 'btn small' + (this.source === 'audio' ? ' on' : ''), onclick: () => this.switchSource('audio') }, 'Recorded copy'));
       i.append(h('div', { class: 'row' }, h('span', { class: 'muted small' }, 'Source: '), sw));
     }
     // melody status
@@ -527,12 +537,12 @@ export class SongStudio {
   setSa(hz) { this.song[this.source + 'Sa'] = hz; upsertSong(this.song); this.refreshKey(); this.renderPhrases(); }
   async applyFit(b) {
     this.song.octave = b.oct; this.octSel.value = String(b.oct);
-    if (b.st && this.source !== 'audio') toast(this.song.hasCopy ? 'Switch to the practice copy to transpose by ' + b.st + ' semitones.' : 'To transpose a YouTube song, rebuild the melody guide with "save a practice copy" ticked.', 'info', 6000);
+    if (b.st && this.source !== 'audio') toast(this.song.hasCopy ? 'Switch the source to "Recorded copy" to transpose by ' + b.st + ' semitones.' : 'To transpose a YouTube song, capture it once (Capture again). That saves a recorded copy you can transpose.', 'info', 6000);
     else if (b.st) await this.setTranspose(b.st);
     upsertSong(this.song); this.refreshKey();
   }
   async setTranspose(st) {
-    if (this.source !== 'audio') { this.trSel.value = '0'; toast(this.song.hasCopy ? 'Transpose works on the practice copy. Switch the source above.' : 'YouTube audio can\'t be pitch-shifted directly. Rebuild the melody guide with "save a practice copy" ticked, then use the copy.', 'info', 6000); return; }
+    if (this.source !== 'audio') { this.trSel.value = '0'; toast(this.song.hasCopy ? 'Transposing works on the recorded copy. Switch the source above to "Recorded copy".' : 'YouTube audio can\'t be pitch-shifted directly. Capture the song once (Capture again); that saves a recorded copy you can transpose.', 'info', 6000); return; }
     this.setStatus('Transposing…');
     await this.player.setTranspose(st);
     this.song.transpose = st; upsertSong(this.song); this.refreshKey();
@@ -548,6 +558,28 @@ export class SongStudio {
     this.renderInfo();
   }
   setStatus(t) { if (this.status) this.status.textContent = t; }
+  // A visible progress panel for long jobs (voice separation, melody tracing).
+  showProgress(stage, p) {
+    if (!this.status) return;
+    let box = this.status.querySelector('.progress');
+    if (!box) {
+      this.status.textContent = '';
+      box = h('div', { class: 'progress' }, h('div', { class: 'spinner', 'aria-hidden': 'true' }), h('div', { class: 'grow' }, h('div', { class: 'p-stage' }), h('div', { class: 'p-bar' }, h('i')),
+        h('div', { class: 'p-note small muted' }, 'This runs a strong AI model on your own computer, so a full song can take a few minutes the first time. Keep this tab open. The result is saved, so it only happens once per song.')));
+      this.status.append(box);
+    }
+    box.querySelector('.p-stage').textContent = stage + (p != null ? ` · ${Math.round(p * 100)}%` : '');
+    // long wait on this computer? offer the faster (less accurate) model
+    const m = stage.match(/about (\d+) min left/);
+    if (m && +m[1] >= 3 && !box.querySelector('.p-fast')) {
+      box.querySelector('.grow').append(h('div', { class: 'p-fast row wrap', style: 'margin-top:10px' },
+        h('button', { class: 'btn small', onclick: (e) => { useFastModel(); e.currentTarget.parentElement.replaceChildren(h('span', { class: 'small muted' }, 'Switching to the faster model…')); } }, 'Use the faster model instead'),
+        h('span', { class: 'small muted' }, 'About a minute, but less accurate: it catches roughly 65% of notes instead of 85%.')));
+    }
+    box.querySelector('.p-bar i').style.width = `${Math.round((p || 0) * 100)}%`;
+    this.lane.message = stage.split(':')[0];
+  }
+  hideProgress() { if (this.status) this.status.textContent = ''; if (this.mel) this.lane.message = ''; }
 
   // ---- phrases -----------------------------------------------------------------
   renderPhrases() {
@@ -646,6 +678,7 @@ export class SongStudio {
     this.playBtn.replaceChildren(icon(st === 1 ? 'pause' : 'play', 22));
     if (st !== 1) this.follower.set(0);
     if (st === 2 || st === 0) this.finishTake(); // paused / ended (not buffering)
+    if (st === 0 && this.capturing && this.onCaptureEnd) this.onCaptureEnd(); // video finished: stop capturing
   }
   key(e) {
     if (!this.active || /INPUT|TEXTAREA|SELECT/.test(document.activeElement && document.activeElement.tagName)) return;
@@ -862,13 +895,20 @@ export class SongStudio {
     const progTimer = setInterval(() => { prog.textContent = `${fmtTime(p.time())} / ${fmtTime(p.duration())}`; }, 500);
     await new Promise((res) => {
       stopBtn.onclick = res;
+      this.onCaptureEnd = res; // called from onState when the video ends
       at.addEventListener('ended', res, { once: true });
-      const endChk = setInterval(() => { if (p.duration() && p.time() >= p.duration() - 0.3) { clearInterval(endChk); res(); } }, 500);
+      let lastT = -1, still = 0;
+      const endChk = setInterval(() => {
+        const t = p.time();
+        if (p.duration() && t >= p.duration() - 0.5) { clearInterval(endChk); res(); return; }
+        still = Math.abs(t - lastT) < 0.01 && t > 5 ? still + 1 : 0; lastT = t;
+        if (still >= 8) { clearInterval(endChk); res(); } // nothing has moved for 4 s
+      }, 500);
       stopBtn.addEventListener('click', () => clearInterval(endChk));
     });
     clearInterval(progTimer); clearInterval(mapTimer);
     p.pause();
-    this.capturing = false;
+    this.capturing = false; this.onCaptureEnd = null;
     setMasterMuted(false);
     if (prevMode === 'muted') this.player.mute(true);
     p.setRate(this.speed);
@@ -876,7 +916,7 @@ export class SongStudio {
     let copyBlob = null;
     if (rec && rec.state !== 'inactive') { await new Promise((r2) => { rec.onstop = r2; rec.stop(); }); copyBlob = new Blob(chunks, { type: rec.mimeType || 'audio/webm' }); }
     stream.getTracks().forEach((t) => t.stop());
-    this.setStatus('Building melody…');
+    this.showProgress('Building the melody…', 0);
     // assemble grid, merge with any existing melody
     const idx = [...frames.keys()];
     if (idx.length < 100) { this.lane.refAt = prevRef; this.renderInfo(); return toast('Too little audio was captured. Was tab audio shared?', 'bad'); }
@@ -892,14 +932,16 @@ export class SongStudio {
     for (let g = 0; g < part.cents.length; g++) { const gi = minI + g; if (frames.has(gi) || frames.has(gi - 1) || frames.has(gi + 1)) cents[gi] = part.cents[g]; }
     let mel = { hop: 0.01, t0: 0, cents };
     let savedCopy = false;
-    if (copyBlob && copyBlob.size > 50000 && song.kind === 'youtube' && !song.hasCopy) {
+    const recSecs = mapping.length ? mapping[mapping.length - 1].rt : 0;
+    if (copyBlob && copyBlob.size > 50000 && song.kind === 'youtube' && (!song.hasCopy || recSecs > (song.copySecs || 0) - 1)) {
+      song.copySecs = recSecs;
       await idbPut('audio', song.id, copyBlob);
       song.hasCopy = true; savedCopy = true; upsertSong(song);
     }
     // Better melody: separate the voice from the recorded audio, then place it on the video timeline.
     if (copyBlob && copyBlob.size > 50000 && recStart) {
       try {
-        const res = await analyzeBlob(copyBlob, (pr, stage) => this.setStatus(`${stage || 'Analysing…'} ${Math.round(pr * 100)}%`));
+        const res = await analyzeBlob(copyBlob, (pr, stage) => this.showProgress(stage || 'Analysing…', pr));
         if (res.separated) {
           const sepCents = placeOnVideo(res.mel, mapping, cents, frames, minI, maxCap);
           if (sepCents) { mel = { hop: 0.01, t0: 0, cents: sepCents }; song[source + 'Separated'] = true; }
@@ -911,10 +953,10 @@ export class SongStudio {
           upsertSong(song);
         }
       } catch (e) { console.warn('separation after capture failed', e); }
-      this.setStatus('');
+      this.hideProgress();
     }
     await idbPut('melody', song.id + ':' + source, packMelody(mel));
-    if (savedCopy) toast('Also saved a practice copy of the song: switch the source to "Practice copy" to transpose it or hear the voice or backing track on their own.', 'good', 7000);
+    if (savedCopy) toast('Saved a recorded copy of the song. Switch the source to "Recorded copy" to transpose it, or to hear the voice or the backing track on their own.', 'good', 8000);
     if (firstCapture) { song[source + 'Sa'] = null; upsertSong(song); }
     if (this.song !== song || this.source !== source) return; // user moved on; data is saved for later
     this.mel = mel;
@@ -929,20 +971,20 @@ export class SongStudio {
     const blob = await idbGet('audio', song.id);
     if (!blob) return toast('Audio not found in this browser.', 'bad');
     this.busy = true;
-    this.setStatus('Analysing… 0%');
+    this.showProgress('Preparing the audio…', 0);
     try {
-      const { mel, vocals, separated } = await analyzeBlob(blob, (p, stage) => { if (this.song === song) this.setStatus(`${stage || 'Analysing…'} ${Math.round(p * 100)}%`); });
+      const { mel, vocals, separated } = await analyzeBlob(blob, (p, stage) => { if (this.song === song) this.showProgress(stage || 'Analysing…', p); });
       await idbPut('melody', song.id + ':audio', packMelody(mel));
       if (vocals) await idbPut('audio', song.id + ':vocals', toI16(vocals));
       song.audioSa = null; song.audioSeparated = separated; upsertSong(song);
       if (this.song === song && this.source === 'audio') {
         if (vocals && this.player && this.player.kind === 'audio') this.player.setVocals(vocals);
-        this.setStatus('');
+        this.hideProgress();
         this.mel = mel;
         this.analyzeMelody(); this.renderInfo();
         toast(`Melody guide ready: ${this.phrases.length} lines found.`, 'good');
       }
-    } catch (e) { this.setStatus(''); toast('Analysis failed: ' + e.message, 'bad', 7000); }
+    } catch (e) { this.hideProgress(); toast('Analysis failed: ' + e.message, 'bad', 7000); }
     finally { this.busy = false; }
   }
 

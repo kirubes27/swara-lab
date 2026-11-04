@@ -22,9 +22,15 @@ Free and open source, with no accounts: everyone's songs, recordings and progres
 ## How it works (technical)
 
 - **Live pitch:** YIN (de Cheveigné & Kawahara 2002) on the mic, with median smoothing and display hysteresis.
-- **Voice separation:** the song is first split into voice and accompaniment with Deezer's [Spleeter](https://github.com/deezer/spleeter) 2-stem model (MIT; ONNX export from [sherpa-onnx](https://github.com/k2-fsa/sherpa-onnx)), run in the browser with onnxruntime-web (`js/sep-worker.js`, model in `models/`). This also powers *Voice only* and *Backing track* playback.
+- **Voice separation:** the song is first split into voice and accompaniment with the Kim_Vocal_2 MDX-Net model (MIT, from the UVR community), run in the browser with onnxruntime-web on the GPU (WebGPU) when available, else WebAssembly (`js/sep-worker.js`, models in `models/`). Deezer's [Spleeter](https://github.com/deezer/spleeter) 2-stem model (MIT; ONNX export from [sherpa-onnx](https://github.com/k2-fsa/sherpa-onnx)) is the faster fallback. Separation also powers *Voice only* and *Backing track* playback.
 - **Melody tracking:** harmonic-summation salience over 10-cent bins, Viterbi tracking with jump penalties and a voicing state, and octave-error repair, in the spirit of Salamon & Gómez (2012, "Melodia"), run on the isolated voice (`js/melody.js`). YouTube songs are captured from the tab (`getDisplayMedia`), separated after capture, and mapped back onto the video's timeline.
-- **Measured on 50 real songs** (MUSDB18 7-second excerpts, against the true isolated vocal): tracking from the mix gets 55% of sung frames within 50 cents with 83% false melody in non-singing parts. With separation first: 72% and 12%.
+- **Measured on 50 real songs** (MUSDB18 7-second excerpts, against the true isolated vocal):
+
+  | Method | Sung frames within 50¢ | False melody in non-singing parts |
+  |---|---|---|
+  | Tracking the full mix | 55% | 83% |
+  | Spleeter, then tracking | 72% | 12% |
+  | Kim_Vocal_2, then tracking (default) | 87% | 3% |
 - **Transposition:** offline resample (pitch + speed), then the browser's pitch-preserving time-stretch restores the tempo.
 - **Drone:** a soft pad (root + fifth), or a tanpura made with additive synthesis and a moving "jawari" formant sweep, both looped seamlessly.
 - **Storage:** settings and progress in `localStorage`; melodies and audio in IndexedDB.

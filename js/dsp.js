@@ -124,3 +124,30 @@ export function channelsOf(audioBuffer) {
   const R = audioBuffer.numberOfChannels > 1 ? audioBuffer.getChannelData(1) : L;
   return [L, R];
 }
+
+// Any-length DFT via Bluestein's chirp-z algorithm (for FFT sizes like 7680 = 2^9·15).
+// Returns an in-place transform fn(re, im) on Float64Arrays of length n; inverse = true gives the unscaled inverse.
+const czCache = new Map();
+export function anyFFT(n, inverse = false) {
+  const key = n + (inverse ? 'i' : 'f');
+  if (czCache.has(key)) return czCache.get(key);
+  let m = 1; while (m < 2 * n - 1) m <<= 1;
+  const sgn = inverse ? 1 : -1;
+  const wr = new Float64Array(n), wi = new Float64Array(n);
+  for (let k = 0; k < n; k++) { const a = (sgn * Math.PI * ((k * k) % (2 * n))) / n; wr[k] = Math.cos(a); wi[k] = Math.sin(a); }
+  const br = new Float64Array(m), bi = new Float64Array(m);
+  br[0] = wr[0]; bi[0] = -wi[0];
+  for (let k = 1; k < n; k++) { br[k] = br[m - k] = wr[k]; bi[k] = bi[m - k] = -wi[k]; }
+  fft(br, bi);
+  const ar = new Float64Array(m), ai = new Float64Array(m);
+  const fn = (re, im) => {
+    ar.fill(0); ai.fill(0);
+    for (let k = 0; k < n; k++) { ar[k] = re[k] * wr[k] - im[k] * wi[k]; ai[k] = re[k] * wi[k] + im[k] * wr[k]; }
+    fft(ar, ai);
+    for (let k = 0; k < m; k++) { const r = ar[k] * br[k] - ai[k] * bi[k]; ai[k] = -(ar[k] * bi[k] + ai[k] * br[k]); ar[k] = r; } // multiply, conjugate for inverse FFT
+    fft(ar, ai);
+    for (let k = 0; k < n; k++) { const r = ar[k] / m, i = -ai[k] / m; re[k] = r * wr[k] - i * wi[k]; im[k] = r * wi[k] + i * wr[k]; }
+  };
+  czCache.set(key, fn);
+  return fn;
+}
