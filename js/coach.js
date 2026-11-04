@@ -55,8 +55,9 @@ export function analyzeTake({ frames, refAt, start, end, tol = 35, octaveFree = 
     const d = devOf(u, r, octaveFree);
     absDevs.push(Math.abs(d));
     if (Math.abs(d) <= tol) inTol++;
-    if (Math.abs(d) < 250) {
-      devs.push(d);
+    // tendencies use near-misses only; notes >1.5 semitones off are wrong notes, not drift
+    if (Math.abs(d) < 160) {
+      if (Math.abs(d) < 120) devs.push(d);
       if (r >= p80) hiDev.push(d);
       if (r <= p20) loDev.push(d);
     }

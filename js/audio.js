@@ -27,8 +27,12 @@ export class Mic {
     this.gate = 0.008;     // rms gate
     this.hist = [];
   }
-  async start() {
-    if (this.running) return;
+  start() {
+    if (this.running) return Promise.resolve();
+    if (!this.starting) this.starting = this._start().finally(() => { this.starting = null; });
+    return this.starting; // concurrent callers share one getUserMedia request
+  }
+  async _start() {
     const c = audioCtx();
     this.stream = await navigator.mediaDevices.getUserMedia({
       audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false, channelCount: 1 },

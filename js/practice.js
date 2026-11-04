@@ -159,7 +159,10 @@ export class ExercisePlayer {
   }
 
   async start() {
-    if (!(await ensureMic())) return;
+    if (this.running || this.starting) return;
+    this.starting = true;
+    try { if (!(await ensureMic())) return; } finally { this.starting = false; }
+    if (this.running) return;
     try { const { lines, echo, transposeEach } = this.buildLines(); this.plan = makePlan(lines, { echo, transposeEach }); }
     catch (e) { toast(e.message, 'bad'); return; }
     const c = audioCtx();
@@ -278,10 +281,10 @@ export class ExercisePlayer {
     let stopFlag = false;
     const run = async () => {
       if (!(await ensureMic())) return;
-      btn.disabled = true; stopFlag = false; results.length = 0;
+      btn.disabled = true; results.length = 0;
       for (let round = 1; round <= 3 && !stopFlag; round++) {
         // inhale 4 s
-        for (let k = 4; k > 0; k--) { orb.className = 'breath-orb in'; orb.firstChild.textContent = `Inhale ${k}`; await wait(1000); }
+        for (let k = 4; k > 0; k--) { orb.className = 'breath-orb in'; orb.firstChild.textContent = `Inhale ${k}`; await wait(1000); if (stopFlag) return; }
         orb.className = 'breath-orb out'; orb.firstChild.textContent = 'Hiss…';
         const base = mic.level;
         let started = 0, lastLoud = 0, t0 = performance.now();
@@ -303,7 +306,9 @@ export class ExercisePlayer {
         info.textContent = results.map((d, i) => `Round ${i + 1}: ${d.toFixed(1)} s`).join(' · ');
         orb.className = 'breath-orb'; orb.firstChild.textContent = 'Rest';
         await wait(2500);
+        if (stopFlag) return;
       }
+      if (stopFlag || !results.length) return;
       const best = Math.max(...results);
       orb.firstChild.textContent = `Best ${best.toFixed(1)} s`;
       info.append(h('p', {}, best < 12 ? 'Goal: 20 s+. Breathe low (belly and sides expand), keep the hiss quiet and even, and don\'t push the air out.' : best < 25 ? 'Good. Aim for 25–30 s with an even, quiet hiss.' : 'Excellent breath control. Keep it even and relaxed.'));

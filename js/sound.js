@@ -4,7 +4,7 @@ import { audioCtx, masterOut } from './audio.js';
 // ---------------------------------------------------------------------------
 // Tanpura: additive synthesis with a moving "jawari" formant that sweeps down the
 // harmonic series after each pluck (the shimmering buzz of the bridge).
-function renderTanpuraCycle(sr, saHz, first = 'P') {
+export function renderTanpuraCycle(sr, saHz, first = 'P') {
   const firstRatio = { P: 0.75, M: 2 / 3, N: 15 / 16, S: 1 }[first] || 0.75;
   const strings = [
     { f: saHz * firstRatio, at: 0.0, pan: -0.3, amp: 0.9 },

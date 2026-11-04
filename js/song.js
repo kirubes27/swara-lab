@@ -44,24 +44,36 @@ class YTPlayer {
         videoId, width: '100%', height: '100%',
         playerVars: { playsinline: 1, rel: 0, modestbranding: 1, origin: location.origin },
         events: {
-          onReady: () => { res(); onReady && onReady(this); },
+          onReady: () => { this.ok = true; res(); onReady && onReady(this); },
           onStateChange: (e) => { this.playing = e.data === 1; if (e.data === 1) this.prevNow = performance.now(); onState && onState(e.data, this); },
           onError: (e) => onError && onError(e.data),
         },
       });
     }));
   }
-  play() { this.p && this.p.playVideo(); }
-  pause() { this.p && this.p.pauseVideo(); }
-  seek(t) { if (!this.p) return; this.p.seekTo(Math.max(0, t), true); this.smooth = t; this.lastRaw = null; }
-  setRate(r) { this.r = r; this.p && this.p.setPlaybackRate(r); }
-  mute(m) { if (!this.p) return; m ? this.p.mute() : this.p.unMute(); }
-  duration() { return this.p && this.p.getDuration ? this.p.getDuration() || 0 : 0; }
+  play() { this.ok && this.p.playVideo(); }
+  pause() { this.ok && this.p.pauseVideo(); }
+  seek(t) {
+    if (!this.ok) return;
+    t = Math.max(0, t);
+    this.p.seekTo(t, true);
+    // getCurrentTime() keeps reporting the old position for a moment after seekTo
+    this.pendingSeek = { to: t, at: performance.now() };
+    this.smooth = t; this.lastRaw = null;
+  }
+  setRate(r) { this.r = r; this.ok && this.p.setPlaybackRate(r); }
+  mute(m) { if (!this.ok) return; m ? this.p.mute() : this.p.unMute(); }
+  duration() { return this.ok ? this.p.getDuration() || 0 : 0; }
   title() { try { return this.p.getVideoData().title; } catch { return ''; } }
   time() {
-    if (!this.p || !this.p.getCurrentTime) return 0;
-    const raw = this.p.getCurrentTime();
+    if (!this.ok) return 0;
+    let raw = this.p.getCurrentTime();
     const now = performance.now();
+    if (this.pendingSeek) {
+      const ps = this.pendingSeek, el = (now - ps.at) / 1000;
+      const expect = ps.to + (this.playing ? el * this.r : 0);
+      if (Math.abs(raw - expect) > 0.6 && el < 2) raw = expect; else this.pendingSeek = null;
+    }
     const dt = (now - this.prevNow) / 1000; this.prevNow = now;
     if (!this.playing) { this.smooth = raw; return raw; }
     this.r = this.p.getPlaybackRate ? this.p.getPlaybackRate() : this.r;
@@ -72,7 +84,7 @@ class YTPlayer {
     if (Math.abs(err) > 0.3) this.smooth = est; else this.smooth += err * 0.1;
     return this.smooth;
   }
-  destroy() { try { this.p && this.p.destroy(); } catch {} }
+  destroy() { this.ok = false; try { this.p && this.p.destroy(); } catch {} }
 }
 
 class AudioPlayer {
@@ -81,42 +93,46 @@ class AudioPlayer {
     this.a = new Audio(); this.a.preload = 'auto';
     this.a.preservesPitch = true; this.a.mozPreservesPitch = true; this.a.webkitPreservesPitch = true;
     this.url = URL.createObjectURL(blob); this.a.src = this.url;
-    this.a.addEventListener('play', () => onState && onState(1, this));
-    this.a.addEventListener('pause', () => onState && onState(2, this));
-    this.a.addEventListener('ended', () => onState && onState(0, this));
+    const emit = (st) => { if (!this.dead && onState) onState(st, this); };
+    this.a.addEventListener('play', () => emit(1));
+    this.a.addEventListener('pause', () => emit(2));
+    this.a.addEventListener('ended', () => emit(0));
     this.ready = new Promise((res) => { this.a.addEventListener('loadedmetadata', () => res(), { once: true }); this.a.addEventListener('error', () => res(), { once: true }); });
   }
   get playing() { return !this.a.paused && !this.a.ended; }
   play() { this.a.play().catch(() => {}); }
   pause() { this.a.pause(); }
-  seek(t) { this.a.currentTime = Math.max(0, t / this.factor); }
+  seek(t) { if (isFinite(t)) this.a.currentTime = Math.max(0, t / this.factor); }
   setRate(r) { this.r = r; this.a.playbackRate = r / this.factor; }
   mute(m) { this.a.muted = m; }
-  duration() { return (this.a.duration || 0) * this.factor; }
+  duration() { const d = this.a.duration; return (isFinite(d) ? d : 0) * this.factor; } // MediaRecorder WebM reports Infinity
   time() { return this.a.currentTime * this.factor; }
   async decoded() {
     if (!this.buf) this.buf = await audioCtx().decodeAudioData(await this.blob.arrayBuffer());
     return this.buf;
   }
   async setTranspose(st) {
+    this.target = st;
     if (st === this.st) return;
+    let url = this.url, f = 1;
+    if (st !== 0) {
+      f = Math.pow(2, st / 12);
+      const buf = await this.decoded();
+      if (this.target !== st || this.dead) return; // superseded by a newer choice
+      const shifted = await renderRate(buf, f, Math.min(44100, buf.sampleRate));
+      if (this.target !== st || this.dead) return;
+      if (this.shiftUrl) URL.revokeObjectURL(this.shiftUrl);
+      url = this.shiftUrl = URL.createObjectURL(audioBufferToWav(shifted));
+    }
     const t = this.time(), was = this.playing;
     this.pause();
-    if (st === 0) { this.factor = 1; this.a.src = this.url; }
-    else {
-      const f = Math.pow(2, st / 12);
-      const buf = await this.decoded();
-      const shifted = await renderRate(buf, f, Math.min(44100, buf.sampleRate));
-      if (this.shiftUrl) URL.revokeObjectURL(this.shiftUrl);
-      this.shiftUrl = URL.createObjectURL(audioBufferToWav(shifted));
-      this.factor = f; this.a.src = this.shiftUrl;
-    }
+    this.factor = f; this.a.src = url;
     this.st = st;
     await new Promise((res) => this.a.addEventListener('loadedmetadata', res, { once: true }));
     this.setRate(this.r); this.seek(t);
     if (was) this.play();
   }
-  destroy() { this.pause(); URL.revokeObjectURL(this.url); if (this.shiftUrl) URL.revokeObjectURL(this.shiftUrl); }
+  destroy() { this.dead = true; this.pause(); this.a.removeAttribute('src'); this.a.load(); URL.revokeObjectURL(this.url); if (this.shiftUrl) URL.revokeObjectURL(this.shiftUrl); }
 }
 
 // ---------------------------------------------------------------------------
@@ -146,7 +162,7 @@ export class SongStudio {
     this.song = null; this.player = null; this.mel = null; this.source = 'youtube';
     this.speed = 1; this.loopOn = false; this.loop = null; this.mode = 'along'; this.guideOn = false;
     this.follower = new Follower();
-    this.frames = []; this.takeStart = null;
+    this.frames = []; this.takeStart = null; this.phrases = [];
     this.build();
   }
 
@@ -240,10 +256,32 @@ export class SongStudio {
     this.follower.set(0);
   }
 
+  resetTake() {
+    this.finishTake(true);
+    this.curPhrase = null; this.lastTakeFrames = null; this.lastTake = null;
+    this.feedback.innerHTML = '';
+    this.feedback.append(h('p', { class: 'muted' }, 'Loop a line, turn on the mic, and sing. Feedback appears after each pass.'));
+  }
+  guardBusy() {
+    if (!this.busy) return false;
+    toast('Wait for the current melody capture/analysis to finish first.', 'info');
+    this.refreshSelect();
+    return true;
+  }
   async open(id) {
-    if (!id) { this.playerBox.innerHTML = '<p class="muted">Add a song to begin.</p>'; return; }
-    const s = getSong(id); if (!s) return;
+    if (this.guardBusy()) return;
+    this.resetTake();
     if (this.player) { this.player.destroy(); this.player = null; }
+    if (!id || !getSong(id)) {
+      this.song = null; this.mel = null; this.phrases = [];
+      this.playerBox.innerHTML = '<p class="muted">Add a song to begin: "+ Add song" above.</p>';
+      this.info.innerHTML = ''; this.overview.mel = null; this.overview.phrases = []; this.overview.duration = 0;
+      this.lane.refAt = null; this.lane.labels = []; this.lane.message = 'No song loaded';
+      this.renderPhrases();
+      return;
+    }
+    const s = getSong(id);
+    const token = (this.openToken = (this.openToken || 0) + 1);
     this.song = s; lastSong.set(id);
     s.octave = s.octave || 0; s.transpose = s.transpose || 0; s.best = s.best || {}; s.sync = s.sync || 0;
     this.source = s.kind === 'audio' ? 'audio' : (s.useCopy && s.hasCopy ? 'audio' : 'youtube');
@@ -252,7 +290,9 @@ export class SongStudio {
     this.octSel.value = String(s.octave);
     this.trSel.value = '0';
     await this.mountPlayer();
+    if (token !== this.openToken) return; // a newer open() took over
     await this.loadMelody();
+    if (token !== this.openToken) return;
     this.renderInfo();
   }
 
@@ -302,8 +342,11 @@ export class SongStudio {
     this.refreshKey();
     this.renderPhrases();
   }
-  get songSa() { return this.song[this.source + 'Sa'] || saHzFrom(settings); }
-  get practiceSa() { return this.songSa * Math.pow(2, ((this.source === 'audio' ? this.song.transpose || 0 : 0) + 12 * (this.song.octave || 0)) / 12); }
+  get songSa() { return (this.song && this.song[this.source + 'Sa']) || saHzFrom(settings); }
+  get practiceSa() {
+    if (!this.song) return saHzFrom(settings);
+    return this.songSa * Math.pow(2, ((this.source === 'audio' ? this.song.transpose || 0 : 0) + 12 * (this.song.octave || 0)) / 12);
+  }
   refAt = (t) => {
     if (!this.mel) return NaN;
     const v = melodyAt(this.mel, t - (this.song.sync || 0) / 1000);
@@ -328,7 +371,7 @@ export class SongStudio {
 
   // ---- info panel ------------------------------------------------------------
   renderInfo() {
-    const s = this.song, i = this.info; if (!s) return;
+    const s = this.song, i = this.info; if (!s || this.capturing) return;
     i.innerHTML = '';
     i.append(h('h2', {}, s.title || 'Untitled'));
     if (s.note) i.append(h('p', { class: 'muted small' }, s.note));
@@ -394,9 +437,10 @@ export class SongStudio {
     this.setStatus('');
   }
   async switchSource(src) {
-    if (src === this.source) return;
+    if (src === this.source || this.guardBusy()) return;
+    this.resetTake();
     this.source = src; this.song.useCopy = src === 'audio'; upsertSong(this.song);
-    if (this.player) this.player.destroy();
+    if (this.player) { this.player.destroy(); this.player = null; }
     await this.mountPlayer(); await this.loadMelody();
     if (!this.mel && src === 'audio') await this.analyzeAudio();
     this.renderInfo();
@@ -406,7 +450,7 @@ export class SongStudio {
   // ---- phrases -----------------------------------------------------------------
   renderPhrases() {
     const b = this.phraseBox; b.innerHTML = '';
-    if (!this.phrases || !this.phrases.length) { b.append(h('p', { class: 'muted' }, this.mel ? 'No lines found.' : 'Lines appear once the melody guide is built.')); return; }
+    if (!this.song || !this.phrases || !this.phrases.length) { b.append(h('p', { class: 'muted' }, this.mel ? 'No lines found.' : 'Lines appear once the melody guide is built.')); return; }
     const list = h('ol', { class: 'phrase-list' });
     this.phrases.forEach((p, i) => {
       const best = this.song.best[i];
@@ -419,21 +463,23 @@ export class SongStudio {
     b.append(list, h('p', { class: 'muted small' }, 'Auto-transcribed sargam (approximate). ~ = meend, * = gamak or oscillation, (x) = kan swar. Click a line to loop it.'));
   }
   loopPhrase(i) {
-    const p = this.phrases[i]; if (!p) return;
-    this.curPhrase = i;
+    const p = this.song && this.phrases && this.phrases[i]; if (!p) return;
     this.setLoop(Math.max(0, p.start - 0.4), p.end + 0.5, true);
+    this.curPhrase = i; // set after setLoop, which clears it for custom loops
     this.player && this.player.seek(this.loop.a);
     this.renderPhrases();
   }
   stepPhrase(d) {
-    if (!this.phrases.length) return;
+    if (!this.phrases || !this.phrases.length) return;
     const t = this.player ? this.player.time() : 0;
     let i = this.curPhrase != null ? this.curPhrase + d : this.phrases.findIndex((p) => p.end > t);
     i = Math.max(0, Math.min(this.phrases.length - 1, i));
     this.loopPhrase(i);
   }
   setLoop(a, b, on) {
+    if (!isFinite(a) || !isFinite(b) || b <= a) return;
     this.loop = { a, b };
+    this.curPhrase = null; // a custom loop isn't one of the detected lines
     if (on) { this.loopOn = true; this.loopChk.checked = true; }
     this.syncLoopUI();
     this.finishTake(true);
@@ -443,6 +489,8 @@ export class SongStudio {
     if (!this.loop) this.loop = { a: t, b: t + 5 };
     this.loop[which] = t;
     if (this.loop.b < this.loop.a + 0.5) this.loop.b = this.loop.a + 0.5;
+    this.curPhrase = null;
+    this.finishTake(true);
     this.loopOn = true; this.loopChk.checked = true; this.syncLoopUI();
   }
   syncLoopUI() {
@@ -498,6 +546,13 @@ export class SongStudio {
     const c = audioCtx();
     const step = () => {
       if (!this.active) return;
+      try { this.frameStep(c, lastRange, (v) => (lastRange = v)); } catch (e) { if (!this.loggedErr) { console.error(e); this.loggedErr = true; } }
+      this.raf = requestAnimationFrame(step);
+    };
+    this.raf = requestAnimationFrame(step);
+  }
+  frameStep(c, lastRange, setLastRange) {
+    {
       const p = this.player;
       const t = p ? p.time() : 0;
       const playing = p && p.playing;
@@ -525,7 +580,7 @@ export class SongStudio {
       this.lane.now = t;
       this.lane.user = this.frames.length ? this.frames : this.lastTakeFrames || [];
       this.lane.hideUserFrom = this.mode === 'blind' && playing ? -1e9 : Infinity;
-      if (performance.now() - lastRange > 400) { this.lane.autoRange(t - 2, t + 6); lastRange = performance.now(); }
+      if (performance.now() - lastRange > 400) { this.lane.autoRange(t - 2, t + 6); setLastRange(performance.now()); }
       const last = this.frames[this.frames.length - 1];
       const ref = this.refAt(t);
       const cls = mic.running ? this.readout.update(last && playing ? last.c : (mic.last && mic.last.hz > 0 ? 1200 * Math.log2(mic.last.hz / this.practiceSa) : NaN), this.practiceSa, ref) : this.readout.update(NaN);
@@ -536,9 +591,7 @@ export class SongStudio {
       this.overview.duration = p ? p.duration() || (this.mel ? melodyDuration(this.mel) : 0) : 0;
       this.overview.now = t;
       this.overview.draw();
-      this.raf = requestAnimationFrame(step);
-    };
-    this.raf = requestAnimationFrame(step);
+    }
   }
 
   // ---- takes & feedback ----------------------------------------------------------
@@ -596,10 +649,16 @@ export class SongStudio {
     this.player.seek(a);
     this.player.mute(false);
     this.player.play();
-    const startWhen = () => { if (this.player.playing) au.play(); else setTimeout(startWhen, 30); };
+    const stopAt = this.lastTake.b, player = this.player, t0 = performance.now();
+    const done = () => { au.pause(); if (this.mode === 'muted' && this.player === player) player.mute(true); };
+    const startWhen = () => {
+      if (this.player !== player) return;
+      if (!player.playing) { if (performance.now() - t0 < 8000) setTimeout(startWhen, 30); return; }
+      au.play();
+      // only start watching for the end once both are actually playing
+      const chk = setInterval(() => { if (this.player !== player || !player.playing || player.time() >= stopAt) { clearInterval(chk); done(); } }, 100);
+    };
     startWhen();
-    const stopAt = this.lastTake.b;
-    const chk = setInterval(() => { if (!this.player.playing || this.player.time() >= stopAt) { au.pause(); clearInterval(chk); if (this.mode === 'muted') this.player.mute(true); } }, 100);
   }
 
   // ---- melody capture from this tab (YouTube) --------------------------------------
@@ -616,6 +675,12 @@ export class SongStudio {
     } catch (e) { return toast('Capture cancelled.', 'info'); }
     const at = stream.getAudioTracks()[0];
     if (!at) { stream.getTracks().forEach((t) => t.stop()); return toast('No audio was shared. Pick this tab and switch on "Also share tab audio".', 'bad', 7000); }
+    const song = this.song, source = this.source;
+    this.busy = true;
+    try { await this._capture(stream, at, song, source, keepCopy); }
+    finally { this.busy = false; this.capturing = false; setMasterMuted(false); }
+  }
+  async _capture(stream, at, song, source, keepCopy) {
     const c = audioCtx();
     const src = c.createMediaStreamSource(new MediaStream([at]));
     const tap = await createTap(c);
@@ -688,6 +753,7 @@ export class SongStudio {
     // assemble grid, merge with any existing melody
     const idx = [...frames.keys()];
     if (idx.length < 100) { this.lane.refAt = prevRef; this.renderInfo(); return toast('Too little audio was captured. Was tab audio shared?', 'bad'); }
+    const firstCapture = !this.mel;
     const maxI = Math.max(...idx, this.mel ? this.mel.cents.length - 1 : 0);
     const minI = Math.min(...idx), maxCap = Math.max(...idx);
     const arr = new Array(maxCap - minI + 1);
@@ -695,32 +761,41 @@ export class SongStudio {
     const part = trackMelody(arr, { hop: 0.01, t0: minI * 0.01 });
     const cents = new Float32Array(maxI + 1).fill(NaN);
     if (this.mel) for (let g = 0; g < this.mel.cents.length; g++) { const tt = this.mel.t0 + g * this.mel.hop; const gi = Math.round(tt / 0.01); if (gi <= maxI) cents[gi] = this.mel.cents[g]; }
-    for (let g = 0; g < part.cents.length; g++) cents[minI + g] = part.cents[g];
-    this.mel = { hop: 0.01, t0: 0, cents };
-    await idbPut('melody', this.song.id + ':youtube', packMelody(this.mel));
-    if (copyBlob && copyBlob.size > 50000 && !this.song.hasCopy) {
-      await idbPut('audio', this.song.id, copyBlob);
-      this.song.hasCopy = true; upsertSong(this.song);
+    // only overwrite stretches that were actually captured this time (keeps earlier captures)
+    for (let g = 0; g < part.cents.length; g++) { const gi = minI + g; if (frames.has(gi) || frames.has(gi - 1) || frames.has(gi + 1)) cents[gi] = part.cents[g]; }
+    const mel = { hop: 0.01, t0: 0, cents };
+    await idbPut('melody', song.id + ':' + source, packMelody(mel));
+    if (copyBlob && copyBlob.size > 50000 && song.kind === 'youtube' && !song.hasCopy) {
+      await idbPut('audio', song.id, copyBlob);
+      song.hasCopy = true; upsertSong(song);
       toast('Saved a practice copy. Switch the source to "Practice copy" to transpose.', 'good', 6000);
     }
-    this.song.youtubeSa = null; upsertSong(this.song);
+    if (firstCapture) { song[source + 'Sa'] = null; upsertSong(song); }
+    if (this.song !== song || this.source !== source) return; // user moved on; data is saved for later
+    this.mel = mel;
     this.analyzeMelody();
     this.renderInfo();
     toast(`Melody guide ready: ${this.phrases.length} lines found.`, 'good');
   }
 
   async analyzeAudio() {
-    const blob = await idbGet('audio', this.song.id);
+    if (!this.song || this.busy) return;
+    const song = this.song;
+    const blob = await idbGet('audio', song.id);
     if (!blob) return toast('Audio not found in this browser.', 'bad');
+    this.busy = true;
     this.setStatus('Analysing… 0%');
     try {
-      const mel = await analyzeBlob(blob, (p) => this.setStatus(`Analysing… ${Math.round(p * 100)}%`));
-      this.mel = mel;
-      await idbPut('melody', this.song.id + ':audio', packMelody(mel));
-      this.song.audioSa = null; upsertSong(this.song);
-      this.analyzeMelody(); this.renderInfo();
-      toast(`Melody guide ready: ${this.phrases.length} lines found.`, 'good');
+      const mel = await analyzeBlob(blob, (p) => { if (this.song === song) this.setStatus(`Analysing… ${Math.round(p * 100)}%`); });
+      await idbPut('melody', song.id + ':audio', packMelody(mel));
+      song.audioSa = null; upsertSong(song);
+      if (this.song === song && this.source === 'audio') {
+        this.mel = mel;
+        this.analyzeMelody(); this.renderInfo();
+        toast(`Melody guide ready: ${this.phrases.length} lines found.`, 'good');
+      }
     } catch (e) { this.setStatus(''); toast('Analysis failed: ' + e.message, 'bad', 7000); }
+    finally { this.busy = false; }
   }
 
   // ---- adding songs ---------------------------------------------------------------
