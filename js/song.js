@@ -172,7 +172,7 @@ function runWorker(url, msg, transfer, onProgress) {
     const w = new Worker(new URL(url, import.meta.url), { type: 'module' });
     if (url.includes('sep-worker')) activeSep = w;
     w.onmessage = (e) => {
-      if (e.data.progress != null) onProgress && onProgress(e.data.progress, e.data.stage);
+      if (e.data.progress != null) onProgress && onProgress(e.data.progress, e.data.step || e.data.stage, e.data);
       if (e.data.done) { w.terminate(); if (activeSep === w) activeSep = null; res(e.data); }
       if (e.data.error) { w.terminate(); if (activeSep === w) activeSep = null; rej(new Error(e.data.error)); }
     };
@@ -188,14 +188,14 @@ async function analyzeBlob(blob, onProgress) {
   try {
     const b44 = await renderRate(buf, 1, 44100);
     const L = b44.getChannelData(0).slice(), R = (b44.numberOfChannels > 1 ? b44.getChannelData(1) : b44.getChannelData(0)).slice();
-    const r = await runWorker('./sep-worker.js', { L, R, models: MODELS }, [L.buffer, R.buffer], onProgress);
+    const r = await runWorker('./sep-worker.js', { L, R, models: MODELS, prefer: settings.sepQuality === 'fast' ? 'fast' : 'best' }, [L.buffer, R.buffer], onProgress);
     return { mel: r.mel, vocals: r.vocals, separated: true, model: r.model };
   } catch (err) {
     console.warn('vocal separation unavailable, using mix-based tracking:', err);
     toast('Voice separation isn\'t available in this browser, so the melody is traced from the full mix (less accurate).', 'info', 7000);
     const small = await renderRate(buf, 1, 22050);
     const L = small.getChannelData(0).slice(), R = (small.numberOfChannels > 1 ? small.getChannelData(1) : small.getChannelData(0)).slice();
-    const r = await runWorker('./worker.js', { L, R, sr: 22050 }, [L.buffer, R.buffer], (p) => onProgress && onProgress(p, 'Tracking the melody…'));
+    const r = await runWorker('./worker.js', { L, R, sr: 22050 }, [L.buffer, R.buffer], (p) => onProgress && onProgress(p, 'trace', {}));
     return { mel: r.mel, vocals: null, separated: false };
   }
 }
@@ -233,6 +233,15 @@ const toI16 = (f) => { const o = new Int16Array(f.length); for (let i = 0; i < f
 const fromI16 = (a) => { const o = new Float32Array(a.length); for (let i = 0; i < a.length; i++) o[i] = a[i] / 32767; return o; };
 
 const cAbove55 = (hz) => 1200 * Math.log2(hz / F_REF);
+
+// "Best quality / Faster" choice for voice separation (remembered in settings).
+function qualitySeg() {
+  const el = h('div', { class: 'seg', title: 'Best quality: Kim Vocal 2 model (stronger, slower). Faster: Spleeter.' });
+  for (const [v, label] of [['best', 'Best quality'], ['fast', 'Faster']]) {
+    el.append(h('button', { class: (settings.sepQuality || 'best') === v ? 'on' : '', onclick: (e) => { saveSettings({ sepQuality: v }); [...el.children].forEach((b) => b.classList.toggle('on', b === e.currentTarget)); } }, label));
+  }
+  return el;
+}
 
 // Plain reading of a transcription: the held notes only, no ornament symbols.
 function simpleNotes(toks) {
@@ -498,10 +507,13 @@ export class SongStudio {
         h('strong', {}, 'First, build the melody guide'),
         h('p', {}, this.source === 'youtube'
           ? 'Swara Lab listens to the song once while it plays, separates the voice from the instruments, and traces the melody. Click below, choose "This tab", and switch on "Also share tab audio". Keep this tab open while the song plays.'
-          : 'Swara Lab separates the voice from the instruments and traces the melody. It runs on your computer and takes about a minute for a full song.'),
-        this.source === 'youtube'
-          ? h('button', { class: 'btn primary', onclick: () => this.captureTab() }, icon('headphones', 16), 'Build melody guide')
-          : h('button', { class: 'btn primary', onclick: () => this.analyzeAudio() }, icon('sparkle', 16), 'Analyse the song'),
+          : 'Swara Lab separates the voice from the instruments with an AI model, then traces the melody. It runs privately on this computer.'),
+        h('div', { class: 'row wrap', style: 'margin-top:10px;gap:10px 14px' },
+          this.source === 'youtube'
+            ? h('button', { class: 'btn primary', onclick: () => this.captureTab() }, icon('headphones', 16), 'Build melody guide')
+            : h('button', { class: 'btn primary', onclick: () => this.analyzeAudio() }, icon('sparkle', 16), 'Analyse the song'),
+          qualitySeg()),
+        h('p', { class: 'small muted', style: 'margin-top:8px' }, 'Best quality takes a few minutes for a full song (faster with a graphics card). Faster takes about a minute but misses more notes.'),
       ));
     } else {
       const sa = this.songSa, m = hzToMidi(sa);
@@ -525,7 +537,7 @@ export class SongStudio {
       } else i.append(h('p', { class: 'small muted' }, `Melody spans ${span}. `, h('a', { href: '#range' }, 'Do the range test'), ' to get a key suggestion.'));
       const row = h('div', { class: 'row wrap' });
       if (this.source === 'youtube') row.append(h('button', { class: 'btn small', onclick: () => this.captureTab() }, icon('headphones', 14), 'Capture again'));
-      else row.append(h('button', { class: 'btn small', onclick: () => this.analyzeAudio() }, icon('sparkle', 14), 'Re-analyse'));
+      else row.append(h('button', { class: 'btn small', onclick: () => this.analyzeAudio() }, icon('sparkle', 14), 'Re-analyse'), qualitySeg());
       if (!s[this.source + 'Separated']) row.append(h('span', { class: 'small muted' }, 'Traced from the full mix. Re-analyse to separate the voice for better accuracy.'));
       i.append(row);
     }
@@ -558,27 +570,49 @@ export class SongStudio {
     this.renderInfo();
   }
   setStatus(t) { if (this.status) this.status.textContent = t; }
-  // A visible progress panel for long jobs (voice separation, melody tracing).
-  showProgress(stage, p) {
+  // Progress card for long jobs: ring + steps + time left + quality switch.
+  showProgress(step, p, info = {}) {
     if (!this.status) return;
-    let box = this.status.querySelector('.progress');
+    const STEPS = [['prepare', 'Preparing the audio', 0.04], ['load', 'Loading the voice-separation model', 0.08], ['separate', 'Separating the voice from the music', 0.78], ['trace', 'Tracing the melody', 0.10]];
+    let box = this.status.querySelector('.analysis');
     if (!box) {
       this.status.textContent = '';
-      box = h('div', { class: 'progress' }, h('div', { class: 'spinner', 'aria-hidden': 'true' }), h('div', { class: 'grow' }, h('div', { class: 'p-stage' }), h('div', { class: 'p-bar' }, h('i')),
-        h('div', { class: 'p-note small muted' }, 'This runs a strong AI model on your own computer, so a full song can take a few minutes the first time. Keep this tab open. The result is saved, so it only happens once per song.')));
+      const C = 2 * Math.PI * 26;
+      box = h('div', { class: 'analysis', role: 'status', 'aria-live': 'polite' },
+        h('div', { class: 'ring', html: `<svg viewBox="0 0 64 64" aria-hidden="true"><circle class="track" cx="32" cy="32" r="26"/><circle class="fill" cx="32" cy="32" r="26" stroke-dasharray="${C}" stroke-dashoffset="${C}"/></svg><span class="pct">0%</span>` }),
+        h('div', { class: 'a-body' },
+          h('div', { class: 'a-title' }, 'Analysing the song'),
+          h('ol', { class: 'a-steps' }, ...STEPS.map(([k, label]) => h('li', { 'data-s': k }, h('span', { class: 'a-dot' }), h('span', { class: 'a-label' }, label), h('span', { class: 'a-sub' })))),
+          h('div', { class: 'a-meta' }),
+          h('div', { class: 'a-foot' },
+            h('div', { class: 'seg a-quality', title: 'Best quality uses a larger model (Kim Vocal 2). Faster uses Spleeter.' },
+              h('button', { 'data-q': 'best' }, 'Best quality'), h('button', { 'data-q': 'fast', onclick: () => { useFastModel(); saveSettings({ sepQuality: 'fast' }); box.dataset.model = 'spleeter'; this.syncQuality(box); } }, 'Faster')),
+            h('span', { class: 'a-note' }, 'Runs privately on this computer. Each song is analysed once, then saved.'))));
+      box.querySelector('[data-q="best"]').onclick = () => { if (box.dataset.model === 'spleeter') toast('The faster model is already running. To use best quality, choose Re-analyse when it finishes.', 'info', 5000); saveSettings({ sepQuality: 'best' }); };
+      box.dataset.model = settings.sepQuality === 'fast' ? 'spleeter' : 'kim';
       this.status.append(box);
     }
-    box.querySelector('.p-stage').textContent = stage + (p != null ? ` · ${Math.round(p * 100)}%` : '');
-    // long wait on this computer? offer the faster (less accurate) model
-    const m = stage.match(/about (\d+) min left/);
-    if (m && +m[1] >= 3 && !box.querySelector('.p-fast')) {
-      box.querySelector('.grow').append(h('div', { class: 'p-fast row wrap', style: 'margin-top:10px' },
-        h('button', { class: 'btn small', onclick: (e) => { useFastModel(); e.currentTarget.parentElement.replaceChildren(h('span', { class: 'small muted' }, 'Switching to the faster model…')); } }, 'Use the faster model instead'),
-        h('span', { class: 'small muted' }, 'About a minute, but less accurate: it catches roughly 65% of notes instead of 85%.')));
-    }
-    box.querySelector('.p-bar i').style.width = `${Math.round((p || 0) * 100)}%`;
-    this.lane.message = stage.split(':')[0];
+    if (info.model) box.dataset.model = info.model;
+    if (step === 'build') { box.classList.add('indeterminate'); box.querySelector('.a-title').textContent = 'Building the melody'; return; }
+    box.classList.remove('indeterminate');
+    const idx = Math.max(0, STEPS.findIndex(([k]) => k === step));
+    let overall = 0;
+    STEPS.forEach(([k, , w], i) => { overall += i < idx ? w : i === idx ? w * Math.min(1, p || 0) : 0; });
+    const C = 2 * Math.PI * 26;
+    box.querySelector('.fill').style.strokeDashoffset = String(C * (1 - overall));
+    box.querySelector('.pct').textContent = Math.round(overall * 100) + '%';
+    box.querySelectorAll('.a-steps li').forEach((li, i) => { li.className = i < idx ? 'done' : i === idx ? 'cur' : ''; });
+    const kim = box.dataset.model !== 'spleeter';
+    box.querySelector('[data-s="load"] .a-sub').textContent = kim ? 'High-quality model · 67 MB, downloaded once' : 'Fast model · 39 MB';
+    const eta = info.eta;
+    const meta = [];
+    if (step === 'separate' && eta != null && p > 0) meta.push(eta > 90 ? `About ${Math.round(eta / 60)} minutes left` : eta > 50 ? 'About a minute left' : eta > 8 ? `About ${Math.round(eta / 5) * 5} seconds left` : 'Almost done');
+    if (info.gpu != null) meta.push(info.gpu ? 'Using your graphics card' : 'Using your processor');
+    if (meta.length) box.querySelector('.a-meta').textContent = meta.join(' · ');
+    this.syncQuality(box);
+    this.lane.message = 'Analysing… ' + Math.round(overall * 100) + '%';
   }
+  syncQuality(box) { box.querySelectorAll('.a-quality button').forEach((b) => b.classList.toggle('on', (b.dataset.q === 'fast') === (box.dataset.model === 'spleeter'))); }
   hideProgress() { if (this.status) this.status.textContent = ''; if (this.mel) this.lane.message = ''; }
 
   // ---- phrases -----------------------------------------------------------------
@@ -883,7 +917,14 @@ export class SongStudio {
     this.lane.message = '';
     const stopBtn = h('button', { class: 'btn primary' }, icon('stop', 14), 'Finish');
     const prog = h('span', { class: 'small' });
-    this.status.innerHTML = ''; this.status.append(h('div', { class: 'callout' }, h('p', {}, 'Capturing. Let the song play to the end (or as far as you need), then press Finish. Don\'t switch the tab away from YouTube audio.'), h('div', { class: 'row' }, stopBtn, prog)));
+    this.status.innerHTML = '';
+    const ring = h('div', { class: 'ring', html: `<svg viewBox="0 0 64 64" aria-hidden="true"><circle class="track" cx="32" cy="32" r="26"/><circle class="fill" cx="32" cy="32" r="26" stroke-dasharray="${2 * Math.PI * 26}" stroke-dashoffset="${2 * Math.PI * 26}"/></svg><span class="pct">0%</span>` });
+    this.status.append(h('div', { class: 'analysis' }, ring, h('div', { class: 'a-body' },
+      h('div', { class: 'a-title' }, 'Listening to the song'),
+      h('p', { class: 'small muted', style: 'margin:0 0 12px' }, 'Let it play to the end. Capture stops by itself when the video finishes, or press Finish to stop early. After that, the voice is separated and the melody traced (a few minutes).'),
+      h('div', { class: 'a-meta' }, prog),
+      h('div', { class: 'a-foot' }, stopBtn, h('span', { class: 'a-note' }, 'Keep this tab open while the song plays.')))));
+    this.captureRing = ring;
     const startT = 0;
     if (!this.mel) { p.seek(startT); }
     p.setRate(1); p.play();
@@ -892,7 +933,11 @@ export class SongStudio {
     let recStart = 0;
     if (rec) { rec.ondataavailable = (e) => e.data.size && chunks.push(e.data); rec.start(1000); recStart = performance.now(); }
     const mapTimer = setInterval(() => mapping.push({ rt: (performance.now() - recStart) / 1000, vt: p.time(), on: p.playing }), 100);
-    const progTimer = setInterval(() => { prog.textContent = `${fmtTime(p.time())} / ${fmtTime(p.duration())}`; }, 500);
+    const progTimer = setInterval(() => {
+      const d = p.duration() || 1, f = Math.min(1, p.time() / d), C = 2 * Math.PI * 26;
+      prog.textContent = `${fmtTime(p.time())} of ${fmtTime(p.duration())}`;
+      ring.querySelector('.fill').style.strokeDashoffset = String(C * (1 - f)); ring.querySelector('.pct').textContent = Math.round(f * 100) + '%';
+    }, 500);
     await new Promise((res) => {
       stopBtn.onclick = res;
       this.onCaptureEnd = res; // called from onState when the video ends
@@ -916,7 +961,7 @@ export class SongStudio {
     let copyBlob = null;
     if (rec && rec.state !== 'inactive') { await new Promise((r2) => { rec.onstop = r2; rec.stop(); }); copyBlob = new Blob(chunks, { type: rec.mimeType || 'audio/webm' }); }
     stream.getTracks().forEach((t) => t.stop());
-    this.showProgress('Building the melody…', 0);
+    this.showProgress('build', null);
     // assemble grid, merge with any existing melody
     const idx = [...frames.keys()];
     if (idx.length < 100) { this.lane.refAt = prevRef; this.renderInfo(); return toast('Too little audio was captured. Was tab audio shared?', 'bad'); }
@@ -941,7 +986,7 @@ export class SongStudio {
     // Better melody: separate the voice from the recorded audio, then place it on the video timeline.
     if (copyBlob && copyBlob.size > 50000 && recStart) {
       try {
-        const res = await analyzeBlob(copyBlob, (pr, stage) => this.showProgress(stage || 'Analysing…', pr));
+        const res = await analyzeBlob(copyBlob, (pr, step, d) => this.showProgress(step, pr, d));
         if (res.separated) {
           const sepCents = placeOnVideo(res.mel, mapping, cents, frames, minI, maxCap);
           if (sepCents) { mel = { hop: 0.01, t0: 0, cents: sepCents }; song[source + 'Separated'] = true; }
@@ -971,9 +1016,9 @@ export class SongStudio {
     const blob = await idbGet('audio', song.id);
     if (!blob) return toast('Audio not found in this browser.', 'bad');
     this.busy = true;
-    this.showProgress('Preparing the audio…', 0);
+    this.showProgress('prepare', 0);
     try {
-      const { mel, vocals, separated } = await analyzeBlob(blob, (p, stage) => { if (this.song === song) this.showProgress(stage || 'Analysing…', p); });
+      const { mel, vocals, separated } = await analyzeBlob(blob, (p, step, d) => { if (this.song === song) this.showProgress(step, p, d); });
       await idbPut('melody', song.id + ':audio', packMelody(mel));
       if (vocals) await idbPut('audio', song.id + ':vocals', toI16(vocals));
       song.audioSa = null; song.audioSeparated = separated; upsertSong(song);

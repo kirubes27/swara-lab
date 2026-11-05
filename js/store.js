@@ -23,6 +23,7 @@ export const DEFAULT_SETTINGS = {
   rangeHighMidi: null,
   octaveFree: true,
   showOrnaments: false, // song lines: plain notes vs notes with ornament symbols
+  sepQuality: 'best',   // voice separation: 'best' (Kim Vocal 2) or 'fast' (Spleeter)
   blind: false,
 };
 

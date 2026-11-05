@@ -92,7 +92,7 @@ const TIPS = [
   ['Hum first.', 'Humming or lip trills before singing make the voice work with less effort.'],
   ['Little and often.', 'Twenty minutes a day beats two hours on Sunday.'],
 ];
-function greeting() { const h0 = new Date().getHours(); return h0 < 5 ? 'Good night' : h0 < 12 ? 'Good morning' : h0 < 18 ? 'Good afternoon' : 'Good evening'; }
+function greeting() { const h0 = new Date().getHours(); return h0 >= 5 && h0 < 12 ? 'Good morning' : h0 >= 12 && h0 < 18 ? 'Good afternoon' : 'Good evening'; }
 function signatureSVG() {
   return `<svg class="signature" viewBox="0 0 460 140" aria-hidden="true">
     <path class="band" d="M10 96 C 60 96, 70 54, 120 54 S 170 54, 190 80 S 240 112, 270 70 S 320 30, 360 38 S 420 64, 450 60"/>
@@ -311,6 +311,7 @@ function renderSettings() {
     ),
     h('div', { class: 'card form' },
       h('h3', {}, 'Audio'),
+      field('Voice separation', sel('sepQuality', [['best', 'Best quality (Kim Vocal 2): a few minutes per song'], ['fast', 'Faster (Spleeter): about a minute, less accurate']]), 'Used when a song is analysed. Best quality traced 87% of sung notes correctly in testing, Faster 72%.'),
       field('Mic sensitivity', range('micSens', 0, 1, 0.05, (v) => Math.round(v * 100) + '%'), 'Raise it if quiet singing isn\'t detected; lower it if room noise is drawn as pitch.'),
       field('Guide volume', range('guideVol', 0, 1, 0.05, (v) => Math.round(v * 100) + '%')),
       field('Guide sound', sel('guideTimbre', [['reed', 'Harmonium-like'], ['sine', 'Pure tone']])),

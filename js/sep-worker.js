@@ -26,13 +26,12 @@ async function session(url, key) {
   throw lastErr;
 }
 const periodicHann = (n) => { const w = new Float64Array(n); for (let i = 0; i < n; i++) w[i] = 0.5 - 0.5 * Math.cos((2 * Math.PI * i) / n); return w; };
-const fmtEta = (s) => (s > 90 ? `about ${Math.round(s / 60)} min left` : s > 5 ? `about ${Math.round(s / 5) * 5} s left` : 'almost done');
 
 // ---- Kim_Vocal_2 (MDX-Net): complex spectrogram in, vocal complex spectrogram out ----------------
 async function separateKim(L, R, url, post) {
   const N_FFT = 7680, HOP = 1024, DF = 3072, DT = 256, NB = N_FFT / 2 + 1;
   const CH = HOP * (DT - 1), TRIM = N_FFT / 2, GEN = CH - 2 * TRIM;
-  post('Loading the AI voice-separation model (67 MB, first time only)…', 0);
+  post('load', 0, { model: 'kim' });
   let { s, ep } = await session(url, 'kim');
   const n = L.length, pad = GEN - (n % GEN);
   const total = TRIM + n + pad + TRIM;
@@ -44,6 +43,7 @@ async function separateKim(L, R, url, post) {
   const outL = new Float32Array(n), outR = new Float32Array(n);
   const cl = new Float64Array(CH + N_FFT), cr = new Float64Array(CH + N_FFT), ws = new Float64Array(CH + N_FFT);
   const chunks = Math.ceil((n + pad) / GEN);
+  post('separate', 0, { model: 'kim', gpu: ep === 'webgpu' }); // model is ready: show the separation step right away
   const t0 = performance.now();
   for (let c = 0, i = 0; i < n + pad; i += GEN, c++) {
     // chunk samples with reflect padding (torch.stft center=True)
@@ -99,7 +99,7 @@ async function separateKim(L, R, url, post) {
     }
     if (wantFast) throw new Error('FAST');
     const el = (performance.now() - t0) / 1000, done = (c + 1) / chunks;
-    post(`Separating the voice with a strong AI model${ep === 'webgpu' ? ' (using your graphics card)' : ''}: ${fmtEta((el / done) * (1 - done))}`, done);
+    post('separate', done, { model: 'kim', gpu: ep === 'webgpu', eta: (el / done) * (1 - done) });
   }
   const v = new Float32Array(n);
   for (let k = 0; k < n; k++) v[k] = 0.5 * (outL[k] + outR[k]);
@@ -109,7 +109,7 @@ async function separateKim(L, R, url, post) {
 // ---- Spleeter 2-stem (fallback): magnitude in, vocal magnitude out -------------------------------
 async function separateSpleeter(L, R, url, post) {
   const N_FFT = 4096, HOP = 1024, F = 1024, T = 512, NB = N_FFT / 2 + 1;
-  post('Loading the fallback separation model…', 0);
+  post('load', 0, { model: 'spleeter' });
   const { s } = await session(url, 'spleeter');
   const N = L.length, win = periodicHann(N_FFT), pad = N_FFT / 2;
   const frames = 1 + Math.floor((N + 2 * pad - N_FFT) / HOP), splits = Math.ceil(frames / T);
@@ -119,7 +119,7 @@ async function separateSpleeter(L, R, url, post) {
   const input = new Float32Array(2 * T * F);
   const sample = (x, i) => { const j = i - pad; return j >= 0 && j < N ? x[j] : 0; };
   for (let sp = 0; sp < splits; sp++) {
-    post('Separating the voice…', sp / splits);
+    post('separate', sp / splits, { model: 'spleeter' });
     input.fill(0);
     const f0 = sp * T, nf = Math.min(T, frames - f0);
     for (let c = 0; c < 2; c++) for (let t = 0; t < nf; t++) {
@@ -167,19 +167,19 @@ function decimate2(x) {
 
 self.onmessage = async (e) => {
   if (e.data && e.data.fast) { wantFast = true; return; }
-  const { L, R, models } = e.data;
-  const post = (stage, p) => self.postMessage({ progress: p, stage });
+  const { L, R, models, prefer } = e.data;
+  const post = (step, p, extra = {}) => self.postMessage({ progress: p, step, ...extra });
   try {
     let vocals, model = 'kim';
-    try { vocals = await separateKim(L, R, models.kim, post); }
+    try { if (prefer === 'fast') throw new Error('FAST'); vocals = await separateKim(L, R, models.kim, post); }
     catch (err) {
       if (String(err && err.message) !== 'FAST') console.warn('Kim_Vocal_2 failed, falling back to Spleeter:', err);
       model = 'spleeter';
       vocals = await separateSpleeter(L, R, models.spleeter, post);
     }
-    post('Tracing the melody of the voice…', 0);
+    post('trace', 0, { model });
     const v22 = decimate2(vocals);
-    const mel = analyzeSignal(v22, v22, 22050, { center: 0, silence: 0.1, onProgress: (p) => post('Tracing the melody of the voice…', p) });
+    const mel = analyzeSignal(v22, v22, 22050, { center: 0, silence: 0.1, onProgress: (p) => post('trace', p, { model }) });
     self.postMessage({ done: true, vocals, model, mel: { hop: mel.hop, t0: mel.t0, cents: mel.cents } }, [vocals.buffer, mel.cents.buffer]);
   } catch (err) {
     self.postMessage({ error: String((err && err.message) || err) });
