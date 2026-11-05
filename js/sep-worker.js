@@ -33,7 +33,7 @@ async function separateKim(L, R, url, post) {
   const N_FFT = 7680, HOP = 1024, DF = 3072, DT = 256, NB = N_FFT / 2 + 1;
   const CH = HOP * (DT - 1), TRIM = N_FFT / 2, GEN = CH - 2 * TRIM;
   post('Loading the AI voice-separation model (67 MB, first time only)…', 0);
-  const { s, ep } = await session(url, 'kim');
+  let { s, ep } = await session(url, 'kim');
   const n = L.length, pad = GEN - (n % GEN);
   const total = TRIM + n + pad + TRIM;
   const sig = (x, j) => { const k = j - TRIM; return k >= 0 && k < n ? x[k] : 0; };
@@ -63,8 +63,20 @@ async function separateKim(L, R, url, post) {
         input[(2 * DF + k) * DT + t] = rr; input[(3 * DF + k) * DT + t] = ri;
       }
     }
-    const res = await s.run({ input: new ort.Tensor('float32', input, [1, 4, DF, DT]) });
-    const y = res[Object.keys(res)[0]].data;
+    let res = await s.run({ input: new ort.Tensor('float32', input, [1, 4, DF, DT]) });
+    let y = res[Object.keys(res)[0]].data;
+    // Safety check on the GPU path: the voice can't carry more energy than the mix, and must be finite.
+    if (ep === 'webgpu' && c === 0) {
+      let ein = 0, eout = 0, bad = false;
+      for (let k = 0; k < input.length; k += 7) { ein += input[k] * input[k]; const v = y[k]; if (!Number.isFinite(v)) { bad = true; break; } eout += v * v; }
+      if (bad || eout > ein * 1.5 + 1e-6) {
+        console.warn('WebGPU output failed the sanity check; switching to WebAssembly');
+        sessions.kim = { s: await ort.InferenceSession.create(url, { executionProviders: ['wasm'], graphOptimizationLevel: 'all' }), ep: 'wasm' };
+        ({ s, ep } = sessions.kim);
+        res = await s.run({ input: new ort.Tensor('float32', input, [1, 4, DF, DT]) });
+        y = res[Object.keys(res)[0]].data;
+      }
+    }
     cl.fill(0); cr.fill(0); ws.fill(0);
     for (let t = 0; t < DT; t++) {
       // Z = VL + i·VR over the full Hermitian spectrum, inverse FFT gives both channels at once
