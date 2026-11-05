@@ -311,7 +311,7 @@ function renderSettings() {
     ),
     h('div', { class: 'card form' },
       h('h3', {}, 'Audio'),
-      field('Voice separation', sel('sepQuality', [['best', 'Best quality (Kim Vocal 2): a few minutes per song'], ['fast', 'Faster (Spleeter): about a minute, less accurate']]), 'Used when a song is analysed. Best quality traced 87% of sung notes correctly in testing, Faster 72%.'),
+      field('Voice separation', sel('sepQuality', [['fast', 'Fast: Spleeter, about a minute'], ['balanced', 'Balanced: Kim Vocal 2, seconds with a graphics card'], ['best', 'Best: Mel-RoFormer, 464 MB download once, a few minutes (needs a graphics card)']]), 'Used when a song is analysed. In testing on 50 real songs: Fast traced 72% of sung notes correctly, Balanced 87%, Best (Mel-RoFormer blended with Kim) 90%, with fewer false notes.'),
       field('Mic sensitivity', range('micSens', 0, 1, 0.05, (v) => Math.round(v * 100) + '%'), 'Raise it if quiet singing isn\'t detected; lower it if room noise is drawn as pitch.'),
       field('Guide volume', range('guideVol', 0, 1, 0.05, (v) => Math.round(v * 100) + '%')),
       field('Guide sound', sel('guideTimbre', [['reed', 'Harmonium-like'], ['sine', 'Pure tone']])),

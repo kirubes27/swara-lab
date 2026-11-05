@@ -12,7 +12,8 @@ ort.env.wasm.wasmPaths = 'https://cdn.jsdelivr.net/npm/onnxruntime-web@1.20.1/di
 ort.env.wasm.numThreads = Math.min(4, (self.crossOriginIsolated && navigator.hardwareConcurrency) || 1);
 
 const sessions = {};
-let wantFast = false; // set when the user asks for the faster model mid-way
+let wantFast = false; // set when the user asks for a faster model mid-way
+let wantBalanced = false;
 async function session(url, key) {
   if (sessions[key]) return sessions[key];
   const tries = [];
@@ -106,6 +107,99 @@ async function separateKim(L, R, url, post) {
   return v;
 }
 
+// ---- Mel-Band RoFormer (Kimberley Jensen's vocals model, MIT; ONNX export by audiojs) ----------------
+// Complex spectrogram in (Hann 2048, hop 441, centred, unnormalised), vocal complex spectrogram out.
+// 8 s segments every 4 s with linear fades of 0.8 s, as Music-Source-Separation-Training's demix() runs it.
+async function cachedModel(url, post, total) {
+  const cache = self.caches ? await caches.open('swaralab-models-v1') : null;
+  const hit = cache && (await cache.match(url));
+  if (hit) return new Uint8Array(await hit.arrayBuffer());
+  const r = await fetch(url);
+  if (!r.ok) throw new Error('model download failed (' + r.status + ')');
+  total = +r.headers.get('content-length') || total;
+  const reader = r.body.getReader(), parts = [];
+  let got = 0, last = 0;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    parts.push(value); got += value.length;
+    if (got - last > 2e6) { last = got; post('download', got / total, { model: 'roformer', mb: got / 1e6, totalMb: total / 1e6 }); }
+  }
+  const blob = new Blob(parts); parts.length = 0;
+  try { if (cache) await cache.put(url, new Response(blob)); } catch {} // storage full: just don't cache
+  return new Uint8Array(await blob.arrayBuffer());
+}
+async function separateRoformer(L, R, url, post, testEP) {
+  if (!testEP && !(self.navigator && navigator.gpu)) throw new Error('NO_GPU');
+  const N_FFT = 2048, HOP = 441, T = 801, NB = N_FFT / 2 + 1, SEG = 352800, STEP = SEG / 2, FADE = SEG / 10;
+  post('download', 0, { model: 'roformer', mb: 0, totalMb: 464 });
+  if (!sessions.rof) {
+    const bytes = await cachedModel(url, post, 464050097);
+    post('load', 0, { model: 'roformer' });
+    sessions.rof = { s: await ort.InferenceSession.create(bytes, { executionProviders: [testEP || 'webgpu'], graphOptimizationLevel: 'all' }), ep: testEP || 'webgpu' };
+  }
+  const { s, ep } = sessions.rof;
+  const win = periodicHann(N_FFT), n = L.length;
+  // reflect the input a segment-less-a-step out on each side (when long enough), like demix()
+  const border = SEG - STEP, wide = n > 2 * border;
+  const M = wide ? n + 2 * border : n;
+  const xAt = (x, i) => { if (!wide) return i < n ? x[i] : 0; let k = i - border, p = 2 * (n - 1); k = ((k % p) + p) % p; return k < n ? x[k] : p - k < n ? x[p - k] : 0; };
+  const starts = []; for (let st = 0; ; st += STEP) { starts.push(st); if (st + SEG >= M) break; }
+  const acc = [new Float64Array(M), new Float64Array(M)], wsum = new Float64Array(M);
+  const re = new Float64Array(N_FFT), im = new Float64Array(N_FFT);
+  const spec = new Float32Array(4 * NB * T), seg = [new Float32Array(SEG), new Float32Array(SEG)];
+  const ola = [new Float64Array((T - 1) * HOP + N_FFT), new Float64Array((T - 1) * HOP + N_FFT)], env = new Float64Array((T - 1) * HOP + N_FFT);
+  for (let t = 0; t < T; t++) for (let k = 0; k < N_FFT; k++) env[t * HOP + k] += win[k] * win[k];
+  post('separate', 0, { model: 'roformer', gpu: ep === 'webgpu' });
+  const t0 = performance.now();
+  for (let si = 0; si < starts.length; si++) {
+    const st = starts[si], len = Math.min(SEG, M - st), reflect = len > SEG / 2;
+    for (let c = 0; c < 2; c++) {
+      const x = c === 0 ? L : R;
+      for (let i = 0; i < SEG; i++) { let j = i; if (i >= len) { if (!reflect) { seg[c][i] = 0; continue; } const p = 2 * (len - 1); j = ((i % p) + p) % p; if (j >= len) j = p - j; } seg[c][i] = xAt(x, st + j); }
+    }
+    // STFT of both channels at once (L + iR), centre-reflect padded
+    for (let t = 0; t < T; t++) {
+      const off = t * HOP - N_FFT / 2;
+      for (let k = 0; k < N_FFT; k++) { let q = off + k; if (q < 0) q = -q; if (q >= SEG) q = 2 * (SEG - 1) - q; re[k] = seg[0][q] * win[k]; im[k] = seg[1][q] * win[k]; }
+      fft(re, im);
+      for (let f = 0; f < NB; f++) {
+        const nf = (N_FFT - f) % N_FFT;
+        spec[(0 * NB + f) * T + t] = 0.5 * (re[f] + re[nf]); spec[(1 * NB + f) * T + t] = 0.5 * (im[f] - im[nf]);
+        spec[(2 * NB + f) * T + t] = 0.5 * (im[f] + im[nf]); spec[(3 * NB + f) * T + t] = -0.5 * (re[f] - re[nf]);
+      }
+    }
+    const res = await s.run({ mix_spec: new ort.Tensor('float32', spec, [1, 4, NB, T]) });
+    const z = res[Object.keys(res)[0]].data;
+    ola[0].fill(0); ola[1].fill(0);
+    for (let t = 0; t < T; t++) {
+      re.fill(0); im.fill(0);
+      for (let f = 0; f < NB; f++) {
+        const lr = z[(0 * NB + f) * T + t], li = z[(1 * NB + f) * T + t], rr = z[(2 * NB + f) * T + t], ri = z[(3 * NB + f) * T + t];
+        re[f] += lr - ri; im[f] += li + rr;
+        if (f > 0 && f < N_FFT / 2) { const nf = N_FFT - f; re[nf] += lr + ri; im[nf] += -li + rr; }
+      }
+      for (let k = 0; k < N_FFT; k++) im[k] = -im[k];
+      fft(re, im); // inverse via conjugation; real part = left, imaginary = right
+      const off = t * HOP;
+      for (let k = 0; k < N_FFT; k++) { ola[0][off + k] += (re[k] / N_FFT) * win[k]; ola[1][off + k] += (-im[k] / N_FFT) * win[k]; }
+    }
+    for (let i = 0; i < len; i++) {
+      let w = 1;
+      if (si > 0 && i < FADE) w = i / (FADE - 1);
+      if (si < starts.length - 1 && i >= SEG - FADE) w = Math.min(w, (SEG - 1 - i) / (FADE - 1));
+      const q = i + N_FFT / 2, e = env[q] > 1e-11 ? env[q] : 1;
+      acc[0][st + i] += (ola[0][q] / e) * w; acc[1][st + i] += (ola[1][q] / e) * w; wsum[st + i] += w;
+    }
+    const el = (performance.now() - t0) / 1000, done = (si + 1) / starts.length;
+    if (wantFast) throw new Error('FAST');
+    post('separate', done, { model: 'roformer', gpu: ep === 'webgpu', eta: (el / done) * (1 - done) });
+  }
+  const v = new Float32Array(n), off0 = wide ? border : 0;
+  for (let i = 0; i < n; i++) { const w = wsum[i + off0] > 0 ? wsum[i + off0] : 1; v[i] = (0.5 * (acc[0][i + off0] + acc[1][i + off0])) / w; }
+  return v;
+}
+
 // ---- Spleeter 2-stem (fallback): magnitude in, vocal magnitude out -------------------------------
 async function separateSpleeter(L, R, url, post) {
   const N_FFT = 4096, HOP = 1024, F = 1024, T = 512, NB = N_FFT / 2 + 1;
@@ -167,15 +261,35 @@ function decimate2(x) {
 
 self.onmessage = async (e) => {
   if (e.data && e.data.fast) { wantFast = true; return; }
-  const { L, R, models, prefer } = e.data;
+  const { L, R, models, prefer, testEP } = e.data; // testEP: automated tests only (no GPU in CI)
   const post = (step, p, extra = {}) => self.postMessage({ progress: p, step, ...extra });
   try {
     let vocals, model = 'kim';
-    try { if (prefer === 'fast') throw new Error('FAST'); vocals = await separateKim(L, R, models.kim, post); }
-    catch (err) {
-      if (String(err && err.message) !== 'FAST') console.warn('Kim_Vocal_2 failed, falling back to Spleeter:', err);
-      model = 'spleeter';
-      vocals = await separateSpleeter(L, R, models.spleeter, post);
+    if (prefer === 'best') {
+      try {
+        vocals = await separateRoformer(L, R, models.roformer, post, testEP); model = 'roformer';
+        // Blend with Kim Vocal 2 (35 %): on 50 real songs the blend traced 89.8 % of sung notes vs 88.4 % for RoFormer alone.
+        try {
+          const refine = (step, p, extra = {}) => post('refine', step === 'separate' ? p : 0, { ...extra, model: 'roformer' });
+          const kim = await separateKim(L, R, models.kim, refine);
+          for (let i = 0; i < vocals.length; i++) vocals[i] = 0.65 * vocals[i] + 0.35 * kim[i];
+          model = 'roformer+kim';
+        } catch (err) { if (String(err && err.message) === 'FAST') wantFast = false; else console.warn('Kim refinement skipped:', err); }
+      }
+      catch (err) {
+        const why = String(err && err.message);
+        if (why === 'FAST') { wantFast = false; wantBalanced = true; }
+        else console.warn('Mel-RoFormer unavailable, using Kim_Vocal_2:', err);
+        post('fallback', 0, { model: 'kim', reason: why === 'NO_GPU' ? 'nogpu' : why === 'FAST' ? 'user' : 'error' });
+      }
+    }
+    if (!vocals) {
+      try { if (prefer === 'fast') throw new Error('FAST'); vocals = await separateKim(L, R, models.kim, post); model = 'kim'; }
+      catch (err) {
+        if (String(err && err.message) !== 'FAST') console.warn('Kim_Vocal_2 failed, falling back to Spleeter:', err);
+        model = 'spleeter';
+        vocals = await separateSpleeter(L, R, models.spleeter, post);
+      }
     }
     post('trace', 0, { model });
     const v22 = decimate2(vocals);

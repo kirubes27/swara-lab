@@ -30,7 +30,13 @@ Free and open source, with no accounts: everyone's songs, recordings and progres
   |---|---|---|
   | Tracking the full mix | 55% | 83% |
   | Spleeter, then tracking | 72% | 12% |
-  | Kim_Vocal_2, then tracking (default) | 87% | 3% |
+  | Kim_Vocal_2, then tracking (*Balanced*, default) | 87% | 3% |
+  | HT-Demucs FT (vocals), then tracking | 83% | 4% |
+  | SCNet-large, then tracking | 85% | 3% |
+  | Mel-Band RoFormer, then tracking | 88% | 2% |
+  | Mel-Band RoFormer + Kim_Vocal_2 blend (*Best*) | 90% | 3% |
+
+  *Best* downloads Kimberley Jensen's Mel-Band RoFormer vocals model (MIT; ONNX export by [audiojs](https://huggingface.co/audiojs/mel-roformer), 464 MB) from Hugging Face once and needs WebGPU.
 - **Transposition:** offline resample (pitch + speed), then the browser's pitch-preserving time-stretch restores the tempo.
 - **Drone:** a soft pad (root + fifth), or a tanpura made with additive synthesis and a moving "jawari" formant sweep, both looped seamlessly.
 - **Storage:** settings and progress in `localStorage`; melodies and audio in IndexedDB.

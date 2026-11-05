@@ -23,13 +23,17 @@ export const DEFAULT_SETTINGS = {
   rangeHighMidi: null,
   octaveFree: true,
   showOrnaments: false, // song lines: plain notes vs notes with ornament symbols
-  sepQuality: 'best',   // voice separation: 'best' (Kim Vocal 2) or 'fast' (Spleeter)
+  sepQuality: 'balanced', // voice separation: 'fast' (Spleeter), 'balanced' (Kim Vocal 2), 'best' (Mel-RoFormer)
   blind: false,
 };
 
 export const settings = Object.assign({}, DEFAULT_SETTINGS, lsGet('settings', {}));
+if ((settings.styleVersion || 0) === 2) { // v3: quality levels renamed ('best' used to mean Kim Vocal 2)
+  if (settings.sepQuality === 'best') settings.sepQuality = 'balanced';
+  settings.styleVersion = 3; lsSet('settings', settings);
+}
 if (!settings.styleVersion) { // v2: general style became the default (Indian style is opt-in)
-  settings.notation = 'western'; settings.styleVersion = 2;
+  settings.notation = 'western'; settings.styleVersion = 3;
   if (settings.thaat) delete settings.thaat;
   lsSet('settings', settings);
 }

@@ -164,7 +164,13 @@ class AudioPlayer {
 }
 
 // ---------------------------------------------------------------------------
-const MODELS = { kim: new URL('../models/kim-vocal-2.onnx', import.meta.url).href, spleeter: new URL('../models/spleeter-vocals.onnx', import.meta.url).href };
+const MODELS = {
+  kim: new URL('../models/kim-vocal-2.onnx', import.meta.url).href,
+  spleeter: new URL('../models/spleeter-vocals.onnx', import.meta.url).href,
+  // 464 MB: too big for GitHub Pages, so fetched from Hugging Face at the exact revision that was benchmarked
+  roformer: 'https://huggingface.co/audiojs/mel-roformer/resolve/c1aba02c00a0bee852d6754fe6ede8164f90a4b3/mel-roformer.fp16.onnx',
+};
+const HAS_GPU = typeof navigator !== 'undefined' && !!navigator.gpu;
 let activeSep = null; // the running separation worker (to ask it for the faster model)
 export function useFastModel() { if (activeSep) activeSep.postMessage({ fast: true }); }
 function runWorker(url, msg, transfer, onProgress) {
@@ -188,7 +194,7 @@ async function analyzeBlob(blob, onProgress) {
   try {
     const b44 = await renderRate(buf, 1, 44100);
     const L = b44.getChannelData(0).slice(), R = (b44.numberOfChannels > 1 ? b44.getChannelData(1) : b44.getChannelData(0)).slice();
-    const r = await runWorker('./sep-worker.js', { L, R, models: MODELS, prefer: settings.sepQuality === 'fast' ? 'fast' : 'best' }, [L.buffer, R.buffer], onProgress);
+    const r = await runWorker('./sep-worker.js', { L, R, models: MODELS, prefer: settings.sepQuality || 'balanced', testEP: self.__swaraTestEP }, [L.buffer, R.buffer], onProgress);
     return { mel: r.mel, vocals: r.vocals, separated: true, model: r.model };
   } catch (err) {
     console.warn('vocal separation unavailable, using mix-based tracking:', err);
@@ -234,14 +240,23 @@ const fromI16 = (a) => { const o = new Float32Array(a.length); for (let i = 0; i
 
 const cAbove55 = (hz) => 1200 * Math.log2(hz / F_REF);
 
-// "Best quality / Faster" choice for voice separation (remembered in settings).
-function qualitySeg() {
-  const el = h('div', { class: 'seg', title: 'Best quality: Kim Vocal 2 model (stronger, slower). Faster: Spleeter.' });
-  for (const [v, label] of [['best', 'Best quality'], ['fast', 'Faster']]) {
-    el.append(h('button', { class: (settings.sepQuality || 'best') === v ? 'on' : '', onclick: (e) => { saveSettings({ sepQuality: v }); [...el.children].forEach((b) => b.classList.toggle('on', b === e.currentTarget)); } }, label));
+// Voice-separation quality (remembered in settings): Fast = Spleeter, Balanced = Kim Vocal 2, Best = Mel-RoFormer.
+const QUALITY = [
+  ['fast', 'Fast', 'Spleeter · about a minute · catches ~72% of notes'],
+  ['balanced', 'Balanced', 'Kim Vocal 2 · seconds with a graphics card · ~87% of notes'],
+  ['best', 'Best', 'Mel-RoFormer + Kim Vocal 2 · 464 MB download once · a few minutes · ~90% of notes, fewest false notes'],
+];
+function qualitySeg(onpick) {
+  const el = h('div', { class: 'seg quality' });
+  const cur = settings.sepQuality || 'balanced';
+  for (const [v, label, tip] of QUALITY) {
+    const off = v === 'best' && !HAS_GPU;
+    el.append(h('button', { class: cur === v ? 'on' : '', 'data-q': v, disabled: off, title: off ? 'Best needs a browser with WebGPU (Chrome or Edge on a computer with a graphics card).' : tip,
+      onclick: (e) => { saveSettings({ sepQuality: v }); [...el.children].forEach((b) => b.classList.toggle('on', b === e.currentTarget)); onpick && onpick(v); } }, label));
   }
   return el;
 }
+function qualityHint(v) { const q = QUALITY.find((x) => x[0] === (v || 'balanced')); return q ? q[2] : ''; }
 
 // Plain reading of a transcription: the held notes only, no ornament symbols.
 function simpleNotes(toks) {
@@ -512,8 +527,8 @@ export class SongStudio {
           this.source === 'youtube'
             ? h('button', { class: 'btn primary', onclick: () => this.captureTab() }, icon('headphones', 16), 'Build melody guide')
             : h('button', { class: 'btn primary', onclick: () => this.analyzeAudio() }, icon('sparkle', 16), 'Analyse the song'),
-          qualitySeg()),
-        h('p', { class: 'small muted', style: 'margin-top:8px' }, 'Best quality takes a few minutes for a full song (faster with a graphics card). Faster takes about a minute but misses more notes.'),
+          qualitySeg((v) => { const p = this.info.querySelector('.q-hint'); if (p) p.textContent = qualityHint(v); })),
+        h('p', { class: 'small muted q-hint', style: 'margin-top:8px' }, qualityHint(settings.sepQuality)),
       ));
     } else {
       const sa = this.songSa, m = hzToMidi(sa);
@@ -570,11 +585,16 @@ export class SongStudio {
     this.renderInfo();
   }
   setStatus(t) { if (this.status) this.status.textContent = t; }
-  // Progress card for long jobs: ring + steps + time left + quality switch.
+  // Progress card for long jobs: ring + steps + time left + speed switch.
   showProgress(step, p, info = {}) {
     if (!this.status) return;
-    const STEPS = [['prepare', 'Preparing the audio', 0.04], ['load', 'Loading the voice-separation model', 0.08], ['separate', 'Separating the voice from the music', 0.78], ['trace', 'Tracing the melody', 0.10]];
     let box = this.status.querySelector('.analysis');
+    const want = (settings.sepQuality || 'balanced') === 'best' && HAS_GPU ? 'roformer' : (settings.sepQuality === 'fast' ? 'spleeter' : 'kim');
+    if (step === 'fallback') {
+      if (box) { box.dataset.model = info.model; this.buildSteps(box); }
+      toast(info.reason === 'nogpu' ? 'Best quality needs a graphics card (WebGPU) in this browser, so Balanced is being used.' : info.reason === 'user' ? 'Switched to Balanced.' : 'Best quality couldn\'t run here, so Balanced is being used.', 'info', 6000);
+      return;
+    }
     if (!box) {
       this.status.textContent = '';
       const C = 2 * Math.PI * 26;
@@ -582,37 +602,47 @@ export class SongStudio {
         h('div', { class: 'ring', html: `<svg viewBox="0 0 64 64" aria-hidden="true"><circle class="track" cx="32" cy="32" r="26"/><circle class="fill" cx="32" cy="32" r="26" stroke-dasharray="${C}" stroke-dashoffset="${C}"/></svg><span class="pct">0%</span>` }),
         h('div', { class: 'a-body' },
           h('div', { class: 'a-title' }, 'Analysing the song'),
-          h('ol', { class: 'a-steps' }, ...STEPS.map(([k, label]) => h('li', { 'data-s': k }, h('span', { class: 'a-dot' }), h('span', { class: 'a-label' }, label), h('span', { class: 'a-sub' })))),
+          h('ol', { class: 'a-steps' }),
           h('div', { class: 'a-meta' }),
           h('div', { class: 'a-foot' },
-            h('div', { class: 'seg a-quality', title: 'Best quality uses a larger model (Kim Vocal 2). Faster uses Spleeter.' },
-              h('button', { 'data-q': 'best' }, 'Best quality'), h('button', { 'data-q': 'fast', onclick: () => { useFastModel(); saveSettings({ sepQuality: 'fast' }); box.dataset.model = 'spleeter'; this.syncQuality(box); } }, 'Faster')),
+            h('button', { class: 'btn small a-faster', onclick: () => { useFastModel(); box.querySelector('.a-faster').disabled = true; box.querySelector('.a-faster').textContent = 'Switching…'; } }, 'Use a faster model'),
             h('span', { class: 'a-note' }, 'Runs privately on this computer. Each song is analysed once, then saved.'))));
-      box.querySelector('[data-q="best"]').onclick = () => { if (box.dataset.model === 'spleeter') toast('The faster model is already running. To use best quality, choose Re-analyse when it finishes.', 'info', 5000); saveSettings({ sepQuality: 'best' }); };
-      box.dataset.model = settings.sepQuality === 'fast' ? 'spleeter' : 'kim';
+      box.dataset.model = want;
+      this.buildSteps(box);
       this.status.append(box);
     }
-    if (info.model) box.dataset.model = info.model;
+    if (info.model && info.model !== box.dataset.model) { box.dataset.model = info.model; this.buildSteps(box); }
     if (step === 'build') { box.classList.add('indeterminate'); box.querySelector('.a-title').textContent = 'Building the melody'; return; }
     box.classList.remove('indeterminate');
-    const idx = Math.max(0, STEPS.findIndex(([k]) => k === step));
+    const steps = box._steps, idx = Math.max(0, steps.findIndex(([k]) => k === step));
     let overall = 0;
-    STEPS.forEach(([k, , w], i) => { overall += i < idx ? w : i === idx ? w * Math.min(1, p || 0) : 0; });
+    steps.forEach(([k, , w], i) => { overall += i < idx ? w : i === idx ? w * Math.min(1, p || 0) : 0; });
     const C = 2 * Math.PI * 26;
     box.querySelector('.fill').style.strokeDashoffset = String(C * (1 - overall));
     box.querySelector('.pct').textContent = Math.round(overall * 100) + '%';
     box.querySelectorAll('.a-steps li').forEach((li, i) => { li.className = i < idx ? 'done' : i === idx ? 'cur' : ''; });
-    const kim = box.dataset.model !== 'spleeter';
-    box.querySelector('[data-s="load"] .a-sub').textContent = kim ? 'High-quality model · 67 MB, downloaded once' : 'Fast model · 39 MB';
-    const eta = info.eta;
+    if (step === 'download' && info.totalMb) box.querySelector('[data-s="download"] .a-sub').textContent = `${Math.round(info.mb)} of ${Math.round(info.totalMb)} MB · saved in your browser for next time`;
     const meta = [];
+    const eta = info.eta;
     if (step === 'separate' && eta != null && p > 0) meta.push(eta > 90 ? `About ${Math.round(eta / 60)} minutes left` : eta > 50 ? 'About a minute left' : eta > 8 ? `About ${Math.round(eta / 5) * 5} seconds left` : 'Almost done');
     if (info.gpu != null) meta.push(info.gpu ? 'Using your graphics card' : 'Using your processor');
     if (meta.length) box.querySelector('.a-meta').textContent = meta.join(' · ');
-    this.syncQuality(box);
+    const fb = box.querySelector('.a-faster');
+    fb.hidden = box.dataset.model === 'spleeter' || step === 'trace';
     this.lane.message = 'Analysing… ' + Math.round(overall * 100) + '%';
   }
-  syncQuality(box) { box.querySelectorAll('.a-quality button').forEach((b) => b.classList.toggle('on', (b.dataset.q === 'fast') === (box.dataset.model === 'spleeter'))); }
+  buildSteps(box) {
+    const m = box.dataset.model;
+    const name = { roformer: 'Mel-RoFormer (best quality)', kim: 'Kim Vocal 2 (balanced)', spleeter: 'Spleeter (fast)' }[m];
+    const size = { roformer: '464 MB', kim: '67 MB', spleeter: '39 MB' }[m];
+    box._steps = [['prepare', 'Preparing the audio', 0.03]]
+      .concat(m === 'roformer' ? [['download', 'Downloading the model', 0.12]] : [])
+      .concat([['load', 'Loading the voice-separation model', 0.05], ['separate', 'Separating the voice from the music', m === 'roformer' ? 0.62 : 0.82]])
+      .concat(m === 'roformer' ? [['refine', 'Refining with a second model', 0.10]] : [])
+      .concat([['trace', 'Tracing the melody', 0.08]]);
+    const ol = box.querySelector('.a-steps'); ol.innerHTML = '';
+    for (const [k, label] of box._steps) ol.append(h('li', { 'data-s': k }, h('span', { class: 'a-dot' }), h('span', { class: 'a-label' }, label), h('span', { class: 'a-sub' }, k === 'load' ? `${name} · ${size}${m === 'roformer' ? '' : ', downloaded once'}` : k === 'download' ? `${size}, once · saved in your browser for next time` : k === 'refine' ? 'Kim Vocal 2, blended in for extra accuracy' : '')));
+  }
   hideProgress() { if (this.status) this.status.textContent = ''; if (this.mel) this.lane.message = ''; }
 
   // ---- phrases -----------------------------------------------------------------
