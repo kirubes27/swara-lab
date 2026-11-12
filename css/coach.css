@@ -1,0 +1,102 @@
+/* Learn this line: the step-by-step coach that takes over the Songs page (js/riff.js).
+   Built on the tokens and components of style.css, so light and dark both follow the theme. */
+
+/* header: back, where we are, the words, the notes */
+.rc-head { min-width: 0; margin: 0 0 22px; }
+.rc-back { max-width: 100%; margin: -6px 0 18px -6px; padding: 2px 6px 2px 0; border-radius: 8px; font-size: .95rem; }
+.rc-back:hover { text-decoration: none; opacity: .8; }
+.rc-back span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.rc-eyebrow { margin-bottom: 8px; font-variant-numeric: tabular-nums; }
+.rc-title { max-width: 32ch; margin: 0; font: 700 2.15rem/1.16 var(--font-display); letter-spacing: -0.032em; text-wrap: balance; overflow-wrap: anywhere; }
+.rc-title .rc-tl { display: block; }
+.rc-title.long { font-size: 1.7rem; letter-spacing: -0.026em; max-width: 40ch; }
+.rc-title.notes { word-spacing: .18em; }
+.rc-notes { margin: 12px 0 0; font: 500 .84rem/1.5 var(--mono); color: var(--text2); letter-spacing: .02em; word-spacing: .35em; }
+.rc-part { display: inline-flex; align-items: center; gap: 10px; max-width: 100%; margin-top: 16px; padding: 4px 4px 4px 14px; border-radius: 999px; background: var(--accent-soft); font-size: .86rem; }
+.rc-part-l { font-weight: 620; color: var(--accent); }
+.rc-part-t { color: var(--text2); font-variant-numeric: tabular-nums; }
+.rc-part .btn { height: 28px; background: var(--surface); }
+.rc-part .btn:hover { background: var(--surface2); }
+
+/* bar: the four steps, one sentence, speed and the primary button (under the lane) */
+.rc-bar { margin-top: 12px; padding: 14px 16px; background: var(--surface); border-radius: var(--r-lg); box-shadow: var(--shadow); }
+.rc-steps { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; }
+.rc-step { position: relative; display: flex; align-items: center; gap: 8px; min-width: 0; padding: 13px 4px 3px 0; border: 0; border-radius: 4px; background: none; color: var(--text2); font: 550 .86rem/1.25 var(--font); letter-spacing: -0.01em; text-align: left; cursor: pointer; transition: color .2s; }
+.rc-step::before { content: ''; position: absolute; left: 0; right: 0; top: 0; height: 3px; border-radius: 3px; background: var(--surface3); transition: background .3s var(--ease); }
+.rc-step:hover { color: var(--text); }
+.rc-step.done::before { background: color-mix(in srgb, var(--good) 75%, transparent); }
+.rc-step.cur { color: var(--text); }
+.rc-step.cur::before { background: var(--accent); }
+.rc-badge { flex: none; width: 20px; height: 20px; border-radius: 50%; display: grid; place-items: center; background: var(--surface2); color: var(--text2); font: 650 .7rem/1 var(--font); font-variant-numeric: tabular-nums; transition: background .3s, color .3s; }
+.rc-step.done .rc-badge { background: color-mix(in srgb, var(--good) 15%, transparent); color: var(--good); }
+.rc-step.cur .rc-badge { background: var(--accent); color: var(--accent-ink); }
+.rc-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.rc-short { display: none; }
+.rc-best { margin-left: auto; padding-left: 4px; font: 650 .8rem/1 var(--font); font-variant-numeric: tabular-nums; color: var(--text3); }
+.rc-best:empty { display: none; }
+.rc-best.good { color: var(--good); } .rc-best.ok { color: var(--ok); } .rc-best.bad { color: var(--bad); }
+.rc-row { display: flex; align-items: center; flex-wrap: wrap; gap: 10px 16px; margin-top: 14px; }
+.rc-say { flex: 1 1 240px; min-width: 0; margin: 0; color: var(--text2); font-size: .92rem; line-height: 1.4; }
+.rc-ctl { display: flex; align-items: center; gap: 8px; margin-left: auto; }
+.rc-count { font-size: .8rem; color: var(--text3); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.rc-count:empty { display: none; }
+.rc-speed { font-variant-numeric: tabular-nums; }
+.rc-go { min-width: 112px; }
+.rc-go:disabled { opacity: .7; }
+
+/* out: a quiet hint before the first pass, then the result card */
+.rc-out { display: grid; grid-template-columns: minmax(0, 1fr) 360px; column-gap: 20px; margin-top: 18px; }
+.rc-out > * { grid-column: 1; min-width: 0; }
+.rc-hint { padding: 2px 2px 0; color: var(--text2); font-size: .9rem; }
+.rc-tip { display: flex; align-items: flex-start; gap: 10px; margin: 0 0 8px; line-height: 1.45; }
+.rc-tip .ic { flex: none; margin-top: 2px; color: var(--text3); }
+.rc-why { padding-left: 26px; }
+.rc-why summary { display: inline-flex; align-items: center; gap: 2px; color: var(--accent); font-weight: 520; cursor: pointer; list-style: none; border-radius: 6px; }
+.rc-why summary::-webkit-details-marker { display: none; }
+.rc-why summary .ic { transition: transform .25s var(--ease); }
+.rc-why[open] summary .ic { transform: rotate(90deg); }
+.rc-why p { max-width: 66ch; margin: 8px 0 0; color: var(--text2); font-size: .88rem; line-height: 1.6; }
+.rc-card { --bg: var(--surface); padding: 20px 22px 18px; background: var(--surface); border-radius: var(--r-lg); box-shadow: var(--shadow); }
+.rc-card.fresh { animation: pagein .4s var(--ease); }
+.rc-top { display: flex; align-items: center; gap: 20px; }
+.rc-card .score-big { width: 76px; height: 76px; font-size: 1.55rem; }
+.rc-sum { flex: 1; min-width: 0; }
+.rc-meta { margin-bottom: 3px; color: var(--text3); font-size: .78rem; font-weight: 550; font-variant-numeric: tabular-nums; }
+.rc-verdict { margin: 0 0 4px; font: 700 1.45rem/1.15 var(--font-display); letter-spacing: -0.025em; }
+.rc-advice { max-width: 62ch; margin: 0; color: var(--text2); font-size: .95rem; line-height: 1.45; }
+.rc-advice:empty { display: none; }
+.rc-chips { margin: 18px 0 0; }
+.rc-chips .chip { min-width: 42px; }
+.rc-hardnotes { display: inline-flex; flex-wrap: wrap; gap: 6px; margin: -3px 0; padding: 3px; border-radius: 13px; box-shadow: inset 0 0 0 1.5px color-mix(in srgb, var(--accent) 70%, transparent); }
+.rc-acts { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px; margin-top: 18px; padding-top: 16px; border-top: 1px solid var(--hair); }
+.rc-acts-l, .rc-acts-r { display: flex; flex-wrap: wrap; gap: 8px; }
+.rc-acts-r { margin-left: auto; }
+.rc-acts-l:empty, .rc-acts-r:empty { display: none; }
+.rc-acts .btn { height: 34px; padding: 0 14px; font-size: .86rem; }
+
+@media (max-width: 1020px) {
+  .rc-out { grid-template-columns: minmax(0, 1fr); }
+}
+@media (max-width: 560px) {
+  .rc-head { margin-bottom: 16px; }
+  .rc-back { margin-bottom: 12px; }
+  .rc-title { font-size: 1.6rem; letter-spacing: -0.028em; }
+  .rc-title.long { font-size: 1.3rem; }
+  .rc-bar { padding: 12px; }
+  .rc-steps { gap: 6px; }
+  .rc-step { flex-wrap: wrap; justify-content: center; gap: 4px 5px; padding: 11px 0 0; text-align: center; font-size: .78rem; }
+  .rc-badge { width: 17px; height: 17px; font-size: .64rem; }
+  .rc-badge .ic { width: 11px; height: 11px; }
+  .rc-full { display: none; } .rc-short { display: inline; }
+  .rc-best { flex-basis: 100%; margin: 0; padding: 0; font-size: .72rem; }
+  .rc-row { gap: 10px; margin-top: 12px; }
+  .rc-say { flex-basis: 100%; font-size: .88rem; }
+  .rc-ctl { width: 100%; margin-left: 0; }
+  .rc-go { flex: 1; }
+  .rc-card { padding: 16px; }
+  .rc-top { align-items: flex-start; gap: 14px; }
+  .rc-card .score-big { width: 60px; height: 60px; font-size: 1.25rem; }
+  .rc-verdict { font-size: 1.2rem; }
+  .rc-advice { font-size: .9rem; }
+  .rc-acts-r { margin-left: 0; }
+}
