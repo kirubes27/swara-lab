@@ -1,7 +1,7 @@
 // Widgets for the Theory pages: piano, fretboard, chord boxes, key wheel, tempo control,
 // segmented controls and link lists, plus a cleanup scope and a few local icons.
 import { h } from './ui.js';
-import { icon } from './icons.js';
+import { icon, iconNames } from './icons.js';
 import { isBlack, mod12, octaveOf, SHARP_NAMES, FLAT_NAMES, TUNING, STRING_NAMES } from './theory-core.js';
 
 const SVGNS = 'http://www.w3.org/2000/svg';
@@ -16,7 +16,8 @@ export function svg(tag, attrs = {}, ...kids) {
   return el;
 }
 
-// Icons only this section needs, drawn like js/icons.js (24×24, 1.75 stroke, round caps).
+// Icons this section needs that js/icons.js may not have, drawn the same way (24×24, 1.75 stroke,
+// round caps). The shared set wins when it has the same name, so the tab bar and tiles match.
 const P = {
   keys: '<rect x="3" y="4" width="18" height="16" rx="2.5"/><path d="M9 13v7M15 13v7"/><rect x="7.4" y="4" width="3.2" height="9" rx=".8" fill="currentColor" stroke="none"/><rect x="13.4" y="4" width="3.2" height="9" rx=".8" fill="currentColor" stroke="none"/>',
   guitar: '<g transform="rotate(45 12 12)"><path d="M12 7.6c1.9 0 3.2 1.3 3.2 3.1 0 1.1-.6 1.7-.4 2.5 1.6.6 2.4 1.9 2.4 3.6 0 2.7-2.3 4.4-5.2 4.4s-5.2-1.7-5.2-4.4c0-1.7.8-3 2.4-3.6.2-.8-.4-1.4-.4-2.5 0-1.8 1.3-3.1 3.2-3.1z"/><circle cx="12" cy="14.4" r="1.4"/><path d="M12 7.6V1.8M10.6 1.8h2.8M10.4 18.4h3.2"/></g>',
@@ -26,17 +27,16 @@ const P = {
   minus: '<path d="M5 12h14"/>',
 };
 export function ic(name, size = 20) {
-  if (!P[name]) return icon(name, size);
+  if (iconNames.includes(name) || !P[name]) return icon(name, size);
   const s = svg('svg', { viewBox: '0 0 24 24', width: size, height: size, fill: 'none', stroke: 'currentColor', 'stroke-width': '1.75', 'stroke-linecap': 'round', 'stroke-linejoin': 'round', 'aria-hidden': 'true', class: 'ic' });
   s.innerHTML = P[name];
   return s;
 }
 
-// Collects cleanups (timers, frames, listeners, observers) so a page can be torn down at once.
+// Collects cleanups (clocks, frames, observers, mic listeners) so a page can be torn down at once.
 export class Scope {
   constructor() { this.fns = []; this.alive = true; }
   add(fn) { if (this.alive) this.fns.push(fn); else fn(); return fn; }
-  listen(target, type, fn, opts) { target.addEventListener(type, fn, opts); this.add(() => target.removeEventListener(type, fn, opts)); }
   observe(el, fn) { const ro = new ResizeObserver(fn); ro.observe(el); this.add(() => ro.disconnect()); return ro; }
   // A requestAnimationFrame loop that ends with the scope (or when the returned function is called).
   loop(fn) {
@@ -116,7 +116,6 @@ export function playButton(label = 'Play') {
       api.on = on;
       b.replaceChildren(ic(on ? 'stop' : 'play', 16), on ? 'Stop' : label);
       b.classList.toggle('primary', !on);
-      b.setAttribute('aria-pressed', String(on));
     },
   };
   api.set(false);
@@ -147,7 +146,7 @@ export class Tempo {
     b.addEventListener('pointerdown', (e) => {
       if (e.button !== 0) return;
       fn(); end();
-      t1 = setTimeout(() => { t2 = setInterval(fn, 70); }, 420);
+      t1 = setTimeout(() => { t2 = setInterval(() => (b.isConnected ? fn() : end()), 70); }, 420);
     });
     for (const ev of ['pointerup', 'pointerleave', 'pointercancel']) b.addEventListener(ev, end);
     b.addEventListener('click', (e) => { if (e.detail === 0) fn(); });
@@ -238,12 +237,11 @@ export class Piano {
   relabel() {
     for (const [m, b] of this.keys) {
       const name = noteLabel(m, this.flats);
-      const text = this.labelFn ? this.labelFn(m) : (isBlack(m) ? name.replace(/-?\d+$/, '') : mod12(m) === 0 ? name : name.replace(/-?\d+$/, ''));
+      const text = this.labelFn ? this.labelFn(m) : mod12(m) === 0 ? name : name.replace(/-?\d+$/, '');
       b.firstChild.textContent = text || '';
       b.setAttribute('aria-label', isBlack(m) ? `${SHARP_NAMES[mod12(m)]}${octaveOf(m)} / ${FLAT_NAMES[mod12(m)]}${octaveOf(m)}` : name);
     }
   }
-  setRange(lo, hi) { if (lo !== this.lo || hi !== this.hi) { this.lo = lo; this.hi = hi; this.render(); } }
   mark(m, cls, on = true) { const b = this.keys.get(m); if (b) b.classList.toggle(cls, on); }
   clear(...cls) { for (const b of this.keys.values()) b.classList.remove(...cls); }
   flash(m, ms = 220) {
@@ -260,14 +258,12 @@ export class Piano {
 // Every position is a button; arrow keys move along frets and across strings.
 const INLAYS = [3, 5, 7, 9, 12, 15, 17];
 export class Fretboard {
-  constructor({ frets = 15, onPick = null, scope = null } = {}) {
+  constructor({ frets = 15, onPick = null, scope }) {
     this.frets = frets; this.onPick = onPick; this.markFn = null; this.vertical = null;
     this.cells = [];
     this.el = h('div', { class: 'th-fb' });
     this.el.addEventListener('keydown', (e) => this.nav(e));
-    const ro = new ResizeObserver(() => this.layout());
-    ro.observe(this.el);
-    if (scope) scope.add(() => ro.disconnect());
+    scope.observe(this.el, () => this.layout());
     this.layout();
   }
   layout() {
@@ -336,7 +332,7 @@ export class Fretboard {
     const ns = Math.min(5, Math.max(0, s + m[0])), nf = Math.min(this.frets, Math.max(0, f + m[1]));
     this.cells[ns][nf].focus();
   }
-  // markFn(s, f, midi) -> null | { label, cls } where cls is '', 'root', 'faint' or 'strong'.
+  // markFn(s, f, midi) -> null | { label, cls } where cls is '', 'root' or 'faint'.
   setMarks(fn) { this.markFn = fn; this.paint(); }
   paint() {
     for (let s = 0; s < 6; s++) for (let f = 0; f <= this.frets; f++) {
@@ -426,7 +422,14 @@ export function wheel({ outer, inner, label, onPick }) {
   return {
     el,
     center(main, sub = '') { cMain.textContent = main; cSub.textContent = sub; },
-    state(fn) { segs.forEach((ring, r) => ring.forEach((g, k) => { g.setAttribute('class', 'th-ws ' + (r ? 'is-in' : 'is-out') + (fn(r, k) ? ' ' + fn(r, k) : '')); })); },
+    // fn(ring, k) -> extra class ('is-sel' marks the chosen key)
+    state(fn) {
+      segs.forEach((ring, r) => ring.forEach((g, k) => {
+        const cls = fn(r, k);
+        g.setAttribute('class', 'th-ws ' + (r ? 'is-in' : 'is-out') + (cls ? ' ' + cls : ''));
+        g.setAttribute('aria-pressed', String(cls === 'is-sel'));
+      }));
+    },
     focusOn(ring, k) { segs.flat().forEach((g) => (g.tabIndex = -1)); segs[ring][k].tabIndex = 0; },
   };
 }
@@ -439,7 +442,7 @@ export function linkList(links) {
     const kind = /youtube\.com/.test(l.url) ? 'video' : external ? 'book' : 'practice';
     return h('a', external ? { href: l.url, target: '_blank', rel: 'noopener' } : { href: l.url },
       h('span', { class: 'li-ic' }, ic(kind, 18)),
-      h('span', { class: 'li-text' }, h('strong', {}, l.t), h('small', {}, l.by)),
+      h('span', { class: 'li-text' }, h('strong', {}, l.t), h('small', {}, l.by), external ? h('span', { class: 'th-sr' }, ' (opens in a new tab)') : null),
       h('span', { class: 'li-end' }, ic(external ? 'external' : 'chevron', 16)));
   }));
 }

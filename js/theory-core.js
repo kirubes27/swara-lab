@@ -62,7 +62,7 @@ function degreeLabel(semis, step) {
 // Scales. `steps` gives each note's letter distance from the tonic (defaults to 0..6).
 export const SCALES = {
   major: { name: 'Major', semis: [0, 2, 4, 5, 7, 9, 11], mood: 'Bright and settled.', indian: ['Bilawal', 'Shankarabharanam'] },
-  minor: { name: 'Natural minor', semis: [0, 2, 3, 5, 7, 8, 10], mood: 'Darker and wistful.', indian: ['Asavari', 'Natabhairavi'] },
+  minor: { name: 'Natural minor', semis: [0, 2, 3, 5, 7, 8, 10], mood: 'Darker and wistful. Also called Aeolian.', indian: ['Asavari', 'Natabhairavi'], mode: 6 },
   majPenta: { name: 'Major pentatonic', semis: [0, 2, 4, 7, 9], steps: [0, 1, 2, 4, 5], mood: 'Open and sunny. No semitone steps, so nothing clashes.', indian: ['Bhoopali', 'Mohanam'] },
   minPenta: { name: 'Minor pentatonic', semis: [0, 3, 5, 7, 10], steps: [0, 2, 3, 4, 6], mood: 'The sound of riffs, blues and vocal runs.', indian: ['Dhani', 'Shuddha Dhanyasi'] },
   blues: { name: 'Blues', semis: [0, 3, 5, 6, 7, 10], steps: [0, 2, 3, 4, 4, 6], mood: 'Minor pentatonic plus one tense "blue" note, the ♭5.' },

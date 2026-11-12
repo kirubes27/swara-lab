@@ -76,7 +76,7 @@ export class RiffCoach {
     for (const [el, cls] of [[s.coachHead, 'rc-head'], [s.coachBar, 'rc-bar'], [s.coachOut, 'rc-out']]) { el.hidden = false; el.classList.add(cls); }
     this.buildBar();
     this.setSpan(this.line);
-    this.applyStep();
+    this.applySoon();
     this.renderHead();
     this.renderOut();
   }
@@ -193,10 +193,11 @@ export class RiffCoach {
     this.step = id;
     this.listens = 0;
     this.s.lastTakeFrames = null;
-    if (this.stopping) this.applyLater = true; // once the pause lands (no guide blip over the tail)
-    else this.applyStep();
+    this.applySoon();
     this.syncBar();
   }
+  // While a pause is still landing, wait for it (no guide tone over the tail of the last pass).
+  applySoon() { if (this.stopping) this.applyLater = true; else this.applyStep(); }
   setStepSpeed(v) {
     this.speeds[this.step] = v;
     this.s.setSpeed(v);
@@ -275,7 +276,7 @@ export class RiffCoach {
     this.passEndAt = now;
     const s = this.s;
     if (this.step === 'listen') {
-      if (++this.listens < 2) { s.seekTo(this.win.a); this.syncCounter(); return; }
+      if (++this.listens < 2) { s.seekTo(this.win.a); this.wrapped = true; this.syncCounter(); return; }
       this.pass = null;
       this.halt();
       this.markListened();
@@ -286,6 +287,7 @@ export class RiffCoach {
     s.finishTake(false);              // scored: the studio calls onTake
     if (this.step === 'memory') { this.halt(); return; } // one pass, then the result
     s.seekTo(this.win.a);
+    this.wrapped = true;
     this.beginPass();
     this.syncCounter();
   }
@@ -307,6 +309,11 @@ export class RiffCoach {
     }
     // a safety net for a missed loop end
     if (playing && !this.stopping && t > this.win.b + 0.3) this.passEnd();
+    // The frame that wrapped still carries the time from before the seek: don't collect it,
+    // or the next pass starts with a sample stamped at the end of the window.
+    const collect = this.step !== 'listen' && !this.wrapped;
+    if (s.collect !== collect) s.collect = collect;
+    this.wrapped = false;
     // On your own: the song drops out where the singer comes in
     const mute = !!(playing && this.step === 'memory' && t >= this.span.a - 0.08 && t <= this.win.b + 0.3);
     if (mute !== this.muted && pl) { this.muted = mute; pl.mute(mute); }
@@ -400,7 +407,7 @@ export class RiffCoach {
     this.result = null; this.back = true;
     this.setSpan(this.line);
     this.step = this.lineStep || this.startStep();
-    this.applyStep();
+    this.applySoon();
     this.renderHead(); this.syncBar(); this.renderOut();
     this.reveal();
   }
@@ -476,8 +483,9 @@ export class RiffCoach {
     this.countEl = h('span', { class: 'rc-count', 'aria-hidden': 'true' });
     this.speedBtn = h('button', { class: 'btn small rc-speed', title: 'Speed (the pitch stays the same)', 'aria-haspopup': 'menu', onclick: (e) => this.openSpeed(e.currentTarget) });
     this.goBtn = h('button', { class: 'btn primary rc-go', onclick: tap(() => this.primary()) });
+    this.liveEl = h('p', { class: 'rc-sr', role: 'status', 'aria-live': 'polite' }); // results, for screen readers
     this.ctlSig = '';
-    this.s.coachBar.replaceChildren(steps, h('div', { class: 'rc-row' }, this.sayEl, h('div', { class: 'rc-ctl' }, this.countEl, this.speedBtn, this.goBtn)));
+    this.s.coachBar.replaceChildren(steps, h('div', { class: 'rc-row' }, this.sayEl, h('div', { class: 'rc-ctl' }, this.countEl, this.speedBtn, this.goBtn)), this.liveEl);
     this.syncBar();
   }
   syncBar() {
@@ -536,8 +544,8 @@ export class RiffCoach {
   hint(empty) {
     const s = this.s;
     const msg = empty ? 'There is almost no singing in this stretch to compare with.'
-      : !s.mel ? 'This song has no melody guide yet, so passes can\'t be scored.'
-        : this.hard ? 'Loop just these notes until they\'re clean, then sing the whole line again.'
+      : !s.mel ? 'This song has no melody guide yet, so passes can’t be scored.'
+        : this.hard ? 'Loop just these notes until they’re clean, then sing the whole line again.'
           : this.back ? 'Now sing the whole line again.'
             : 'Wear headphones if you can, so the mic hears only you.';
     return h('div', { class: 'rc-hint' },
@@ -546,29 +554,35 @@ export class RiffCoach {
         h('summary', {}, h('span', {}, 'Why these steps'), icon('chevron', 14)),
         h('p', {}, WHY, ' ', h('a', { href: '#learn' }, 'More in Learn'))));
   }
+  verdict(R) {
+    const clean = !R.notes.some((n) => n.status === 'bad' || n.status === 'miss'); // not "that's it" while a note is clearly off
+    return R.score >= 85 && clean ? 'That’s it.' : R.score >= 70 ? 'Close.' : 'Keep at it.';
+  }
   resultCard(R) {
     const { ctx, score, notes, lag } = R;
-    const clean = !notes.some((n) => n.status === 'bad' || n.status === 'miss');
-    const verdict = score >= 85 && clean ? 'That’s it.' : score >= 70 ? 'Close.' : 'Keep at it.';
+    const verdict = this.verdict(R), advice = this.advice(notes, lag, R.res, score);
     const meta = STEP[ctx.step].name + ' · ' + fmtSpeed(ctx.speed) + (ctx.hard ? ' · hard part' : '');
-    const card = h('section', { class: 'rc-card' + (R.fresh ? ' fresh' : ''), 'aria-label': 'Result', 'aria-live': 'polite' },
+    if (this.liveEl) this.liveEl.textContent = `${score}. ${verdict} ${advice}`;
+    const card = h('section', { class: 'rc-card' + (R.fresh ? ' fresh' : ''), 'aria-label': 'Result' },
       h('div', { class: 'rc-top' },
         h('div', { class: 'score-big ' + scoreClass(score), style: `--p:${score}`, role: 'img', 'aria-label': `Score ${score} of 100` }, String(score)),
         h('div', { class: 'rc-sum' },
           h('div', { class: 'rc-meta' }, meta),
           h('h2', { class: 'rc-verdict' }, verdict),
-          h('p', { class: 'rc-advice' }, this.advice(notes, lag, R.res)))),
+          h('p', { class: 'rc-advice' }, advice))),
       notes.length ? this.chips(notes, R.outline) : null,
       this.actions(R));
     R.fresh = false;
     return card;
   }
-  advice(notes, lag, res) {
+  advice(notes, lag, res, score) {
     const out = [];
     const sung = notes.filter((n) => n.status !== 'miss'), missed = notes.filter((n) => n.status === 'miss');
     let worst = null;
-    for (const n of sung) if (n.status !== 'good' && (!worst || Math.abs(n.dev) > Math.abs(worst.dev))) worst = n;
-    if (worst) out.push(this.noteSentence(worst));
+    for (const n of sung) if (!worst || Math.abs(n.dev) > Math.abs(worst.dev)) worst = n;
+    // name the note furthest off: always when it's outside the tolerance, and when the score
+    // shows there is still something to fix even though every note landed inside it
+    if (worst && (worst.status !== 'good' || (score < 85 && Math.abs(worst.dev) >= 15))) out.push(this.noteSentence(worst));
     else if (sung.length && !missed.length) out.push('Every note was in tune.');
     else if (!notes.length && res && Math.abs(res.bias) >= 20) {
       const d = Math.round(Math.abs(res.bias));

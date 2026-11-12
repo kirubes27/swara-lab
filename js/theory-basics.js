@@ -423,19 +423,19 @@ function singingDemo(host, scope) {
     if (drone) { drone.stop(); drone = null; } else drone = A.drone(tonic);
     droneBtn.classList.toggle('on', !!drone); droneBtn.setAttribute('aria-pressed', String(!!drone));
   });
-  const micBtn = h('button', { type: 'button', class: 'btn primary', 'aria-pressed': 'false' }, ic('mic', 16), 'Sing');
+  const micBtn = h('button', { type: 'button', class: 'btn primary' }, ic('mic', 16), 'Sing');
   const stopMic = () => {
     if (off) off();
     off = null; shown = NaN;
     marker.classList.remove('is-live');
     rows.forEach((r) => r.classList.remove('is-near'));
-    micBtn.replaceChildren(ic('mic', 16), 'Sing'); micBtn.classList.add('primary'); micBtn.setAttribute('aria-pressed', 'false');
+    micBtn.replaceChildren(ic('mic', 16), 'Sing'); micBtn.classList.add('primary');
     live.set(...IDLE);
   };
   micBtn.addEventListener('click', async () => {
     if (off) { stopMic(); return; }
     if (!(await ensureMic()) || !scope.alive || off) return;
-    micBtn.replaceChildren(ic('stop', 14), 'Stop'); micBtn.classList.remove('primary'); micBtn.setAttribute('aria-pressed', 'true');
+    micBtn.replaceChildren(ic('stop', 14), 'Stop'); micBtn.classList.remove('primary');
     live.set('Sing any note', 'Your voice shows on the ladder.');
     let quiet = 0;
     off = mic.on((f) => {

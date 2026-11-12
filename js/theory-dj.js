@@ -2,7 +2,7 @@
 import { h } from './ui.js';
 import * as A from './theory-audio.js';
 import { mod12, camelotKey, camelotStep, voiceChord } from './theory-core.js';
-import { seg, field, controls, readout, playButton, tapTempo, wheel, ic, svg } from './theory-ui.js';
+import { seg, field, controls, readout, playButton, tapTempo, wheel, ic, svg, setText } from './theory-ui.js';
 
 const range = (a, b) => Array.from({ length: b - a + 1 }, (_, i) => a + i);
 const soon = () => A.now() + 0.03;
@@ -208,10 +208,10 @@ function beatmatchDemo(host, scope) {
     const diff = deckB.bpm0 * (1 + deckB.pitch) - 124;
     const tempoOk = Math.abs(diff) < 0.06, phaseOk = Math.abs(ms) < 12;
     meterDot.classList.toggle('is-good', tempoOk && phaseOk);
-    status.textContent = tempoOk && phaseOk ? 'Locked. The kicks land together.'
+    setText(status, tempoOk && phaseOk ? 'Locked. The kicks land together.'
       : tempoOk ? `Tempo matched. Now nudge B ${ms > 0 ? 'back' : 'ahead'} (${Math.abs(Math.round(ms))} ms ${ms > 0 ? 'early' : 'late'}).`
         : showNums ? `B is ${Math.abs(diff).toFixed(1)} BPM ${diff < 0 ? 'slower' : 'faster'}. Move the fader.`
-          : 'Listen: are the two kicks drifting apart? Move the fader until they stop.';
+          : 'Listen: are the two kicks drifting apart? Move the fader until they stop.');
   });
   scope.add(stop);
   const deck = (name, lightsEl, bpmEl, side) => h('div', { class: 'th-deck is-' + side }, h('strong', {}, name), h('div', { class: 'th-lights' }, ...lightsEl), bpmEl);
@@ -236,7 +236,6 @@ function phrasingDemo(host, scope) {
   const btn = playButton('Play');
   const layout = () => {
     cells.forEach((c, i) => { c.classList.toggle('is-start', i % L === 0); c.classList.toggle('is-alt', Math.floor(i / L) % 2 === 1); });
-    grid.style.setProperty('--cols', L === 32 ? 8 : L);
   };
   const clock = new A.Clock({
     bpm: BPM, div: 4,
@@ -394,25 +393,29 @@ function eqDemo(host, scope) {
     clock.start(); btn.set(true);
   });
   // spectrum
-  let colors = null, frame = 0;
+  let colors = null, idle = 0, frames = 0;
   const readColors = () => {
     const cs = getComputedStyle(document.documentElement);
-    colors = { low: cs.getPropertyValue('--info').trim(), mid: cs.getPropertyValue('--accent').trim(), high: cs.getPropertyValue('--good').trim(), base: cs.getPropertyValue('--surface3').trim(), text: cs.getPropertyValue('--text2').trim() };
+    const v = (name) => cs.getPropertyValue(name).trim();
+    colors = { low: v('--info'), mid: v('--accent'), high: v('--good'), base: v('--surface3'), text: v('--text2'), font: '11px ' + getComputedStyle(canvas).fontFamily };
   };
   scope.loop(() => {
+    const running = nodes && clock.running;
+    if (!running && idle++ % 30) return; // idle: redraw twice a second, enough to follow resizes and theme changes
+    if (running) idle = 0;
     const w = canvas.clientWidth, hgt = canvas.clientHeight, dpr = Math.min(2, window.devicePixelRatio || 1);
     if (!w) return;
     if (canvas.width !== Math.round(w * dpr) || canvas.height !== Math.round(hgt * dpr)) { canvas.width = Math.round(w * dpr); canvas.height = Math.round(hgt * dpr); }
-    if (!colors || frame++ % 30 === 0) readColors();
+    if (!colors || !running || frames++ % 30 === 0) readColors();
     const g = canvas.getContext('2d');
     g.setTransform(dpr, 0, 0, dpr, 0, 0);
     g.clearRect(0, 0, w, hgt);
     const N = Math.max(24, Math.min(64, Math.floor(w / 9))), gap = 2, bw = (w - gap * (N - 1)) / N;
-    if (nodes && clock.running) nodes.an.getByteFrequencyData(nodes.bins);
+    if (running) nodes.an.getByteFrequencyData(nodes.bins);
     for (let k = 0; k < N; k++) {
       const f0 = 30 * Math.pow(16000 / 30, k / N), f1 = 30 * Math.pow(16000 / 30, (k + 1) / N);
       let v = 0;
-      if (nodes && clock.running) {
+      if (running) {
         const b0 = Math.floor((f0 / nodes.sr) * 2 * nodes.bins.length), b1 = Math.max(b0 + 1, Math.floor((f1 / nodes.sr) * 2 * nodes.bins.length));
         for (let b = b0; b < b1; b++) v = Math.max(v, nodes.bins[b] || 0);
       }
@@ -421,8 +424,8 @@ function eqDemo(host, scope) {
       g.fillRect(k * (bw + gap), hgt - 16 - bh, bw, bh);
     }
     g.fillStyle = colors.text;
-    g.font = '11px ' + getComputedStyle(canvas).fontFamily;
-    if (!clock.running) {
+    g.font = colors.font;
+    if (!running) {
       g.textAlign = 'center'; g.textBaseline = 'middle';
       g.fillText('Play the loop to see its spectrum', w / 2, (hgt - 16) / 2);
     }
@@ -469,7 +472,7 @@ function structureDemo(host, scope) {
     bpm: 126, div: 4,
     onStep: (step, t, dt) => {
       const s = step + startStep, part = Math.floor(s / steps);
-      if (part >= PARTS.length) { if (step === Math.ceil(steps * PARTS.length - startStep)) A.at(t, () => stopAll(true), tag); return; }
+      if (part >= PARTS.length) { if (s === steps * PARTS.length) A.at(t, () => finish(true), tag); return; }
       const i = s % 16, inPart = s % steps, o = { tag };
       const name = PARTS[part].name;
       const full = name === 'Drop';
@@ -493,7 +496,7 @@ function structureDemo(host, scope) {
     bands.forEach((b, i) => b.classList.toggle('is-on', i === part));
     out.set(PARTS[part].name, PARTS[part].what);
   };
-  const stopAll = (ended = false) => {
+  const finish = (ended = false) => {
     clock.stop(); A.silence(tag); btn.set(false);
     head.style.opacity = 0;
     partBtns.forEach((b) => b.classList.remove('is-on')); bands.forEach((b) => b.classList.remove('is-on'));
@@ -507,7 +510,7 @@ function structureDemo(host, scope) {
     btn.set(true);
     head.style.opacity = 1;
   };
-  btn.el.addEventListener('click', () => (clock.running ? stopAll() : startAt(0)));
+  btn.el.addEventListener('click', () => (clock.running ? finish() : startAt(0)));
   scope.loop(() => {
     if (!clock.running) return;
     const total = (steps * PARTS.length * 60) / 126 / 4;

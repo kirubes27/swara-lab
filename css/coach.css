@@ -43,6 +43,7 @@
 .rc-speed { font-variant-numeric: tabular-nums; }
 .rc-go { min-width: 112px; }
 .rc-go:disabled { opacity: .7; }
+.rc-sr { position: absolute; width: 1px; height: 1px; margin: -1px; padding: 0; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
 
 /* out: a quiet hint before the first pass, then the result card */
 .rc-out { display: grid; grid-template-columns: minmax(0, 1fr) 360px; column-gap: 20px; margin-top: 18px; }
@@ -75,6 +76,7 @@
 .rc-acts .btn { height: 34px; padding: 0 14px; font-size: .86rem; }
 
 @media (max-width: 1020px) {
+  .coaching .rc-bar { order: 2; } /* the stage stacks: keep the controls right under the lane */
   .rc-out { grid-template-columns: minmax(0, 1fr); }
 }
 @media (max-width: 560px) {

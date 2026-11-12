@@ -47,6 +47,7 @@
 .th-demo-label { font-size: .72rem; font-weight: 650; letter-spacing: .05em; text-transform: uppercase; color: var(--text2); margin-bottom: 14px; }
 .th-h { font-size: 1.1rem; margin: 34px 0 12px; }
 .th-links .li-text strong { font-weight: 560; }
+.th-sr { position: absolute; width: 1px; height: 1px; margin: -1px; padding: 0; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0; }
 
 .th-pager { display: flex; justify-content: space-between; gap: 16px; margin-top: 36px; padding-top: 18px; border-top: 1px solid var(--hair); }
 .th-pg { display: flex; flex-direction: column; gap: 2px; max-width: 48%; }
@@ -155,6 +156,7 @@ p.th-flabel { margin: 18px 0 8px; }
 .th-wc-sub { font-size: 7.5px; fill: var(--text2); text-anchor: middle; }
 .th-keyname { font-size: 1.35rem; font-weight: 650; margin: 0 0 6px; }
 .th-cof-info .th-sub { margin-bottom: 4px; }
+.th-cof-info .th-sub a { color: var(--th-accent-text); font-weight: 600; }
 .th-moves { margin-top: 14px; box-shadow: none; background: var(--surface2); }
 .th-moves > button.li { padding: 11px 14px; }
 .th-moves > button.li:hover { background: var(--surface3); }

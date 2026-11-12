@@ -249,12 +249,12 @@ function tunerDemo(host, scope) {
   const strings = TUNING.map((m, s) => h('button', { type: 'button', class: 'th-tstr', 'aria-label': `Play the target for the ${STRING_NAMES[s]} string, ${noteLabel(m)}`, onclick: () => { A.silence(tag, 0.02); A.pluck(m, soon(), { tag, vel: 0.85 }); } },
     h('strong', {}, SHARP_NAMES[mod12(m)]), h('small', {}, String(6 - s))));
   const modeSeg = seg([['guitar', 'Guitar'], ['chromatic', 'Chromatic']], mode, (v) => { mode = v; target = null; }, 'Tuner mode');
-  const btn = h('button', { type: 'button', class: 'btn primary', 'aria-pressed': 'false' }, ic('mic', 16), 'Start tuner');
+  const btn = h('button', { type: 'button', class: 'btn primary' }, ic('mic', 16), 'Start tuner');
   const idle = (text) => { noteEl.textContent = '–'; noteEl.className = 'th-tnote'; centsEl.textContent = text; status.textContent = ''; strings.forEach((b) => b.classList.remove('is-target', 'is-good')); };
   const stop = () => {
     if (off) off();
     off = null; hist.length = 0; est = NaN; target = null;
-    btn.replaceChildren(ic('mic', 16), 'Start tuner'); btn.classList.add('primary'); btn.setAttribute('aria-pressed', 'false');
+    btn.replaceChildren(ic('mic', 16), 'Start tuner'); btn.classList.add('primary');
     idle('Start, then pluck a string');
   };
   const frame = (f) => {
@@ -263,8 +263,11 @@ function tunerDemo(host, scope) {
     lastVoiced = t;
     const midi = 69 + 12 * Math.log2(f.hz / 440);
     hist.push(midi); if (hist.length > 5) hist.shift();
-    const med = [...hist].sort((a, b) => a - b)[hist.length >> 1];
+    let med = [...hist].sort((a, b) => a - b)[hist.length >> 1];
     if (mode === 'guitar') {
+      // A low string's strong second harmonic can read an octave high. E3 and A3 are not open
+      // strings, so a reading close to either is taken as the low E or A string.
+      for (const s of [40, 45]) if (Math.abs(med - (s + 12)) < 0.35) med -= 12;
       const nearest = TUNING.reduce((b, m) => (Math.abs(m - med) < Math.abs(b - med) ? m : b), TUNING[0]);
       if (target == null || Math.abs(med - target) > Math.abs(med - nearest) + 0.6) target = nearest; // a little hysteresis
     } else {
@@ -276,7 +279,7 @@ function tunerDemo(host, scope) {
     const a = Math.abs(est);
     noteEl.textContent = noteLabel(target);
     noteEl.className = 'th-tnote ' + (a <= 5 ? 'is-good' : a <= 15 ? 'is-ok' : 'is-off');
-    centsEl.textContent = `${est > 0 ? '+' : ''}${Math.round(est)} cents · ${f.hz.toFixed(1)} Hz`;
+    centsEl.textContent = `${est > 0 ? '+' : ''}${Math.round(est)} cents · ${hzOf(med).toFixed(1)} Hz`;
     if (a <= 5) { if (!inTuneSince) inTuneSince = t; } else inTuneSince = 0;
     setText(status, a <= 5 && t - inTuneSince > 350 ? 'In tune' : est < 0 ? 'Flat: tune up' : 'Sharp: tune down');
     strings.forEach((b, s) => { b.classList.toggle('is-target', mode === 'guitar' && TUNING[s] === target); b.classList.toggle('is-good', mode === 'guitar' && TUNING[s] === target && a <= 5); });
@@ -285,7 +288,7 @@ function tunerDemo(host, scope) {
     if (off) { stop(); return; }
     if (!(await ensureMic()) || !scope.alive || off) return;
     off = mic.on(frame);
-    btn.replaceChildren(ic('stop', 14), 'Stop'); btn.classList.remove('primary'); btn.setAttribute('aria-pressed', 'true');
+    btn.replaceChildren(ic('stop', 14), 'Stop'); btn.classList.remove('primary');
     idle('Listening. Pluck one string and let it ring.');
   });
   // The needle eases towards the estimate and drifts back to centre when the string stops.
