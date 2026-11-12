@@ -81,7 +81,7 @@ function renderSection(root, sec) {
   document.title = `${sec.title} · Theory · Swara Lab`;
   root.append(
     back('#theory', 'Theory'),
-    h('div', { class: 'page-head' }, h('div', { class: 'eyebrow' }, 'Theory'), h('h1', {}, sec.title), h('p', { class: 'lead' }, sec.lead)),
+    h('div', { class: 'page-head' }, h('div', { class: 'eyebrow' }, `${sec.lessons.length} lessons`), h('h1', {}, sec.title), h('p', { class: 'lead' }, sec.lead)),
     h('div', { class: 'list th-lessons' }, ...sec.lessons.map((l, i) => h('a', { href: `#theory/${sec.id}/${l.id}` },
       h('span', { class: 'li-ic th-num' }, String(i + 1)),
       h('span', { class: 'li-text' }, h('strong', {}, l.title), h('small', {}, l.sub)),

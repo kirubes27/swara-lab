@@ -323,7 +323,7 @@ function renderSettings(sub) {
       h('h3', {}, 'Feedback'),
       field('In-tune tolerance', sel('tol', [[50, '±50¢: beginner (half a semitone)'], [35, '±35¢: standard'], [25, '±25¢: strict'], [15, '±15¢: microtone work']])),
       field('Octave-forgiving', h('span', {}, chk('octaveFree'), ' count a note as right in any octave'), 'Useful when singing a song originally sung by another voice type.'),
-      field('Blind mode by default', h('span', {}, chk('blind'), ' hide my live line in drills'), 'Practising without constant feedback improves retention (the "guidance hypothesis" in motor learning).'),
+      field('Hidden line by default', h('span', {}, chk('blind'), ' hide my live line in drills'), 'Practising without constant feedback improves retention (the "guidance hypothesis" in motor learning).'),
     ),
     h('div', { class: 'card form' },
       h('h3', {}, 'Audio'),

@@ -40,7 +40,7 @@ function fretboardDemo(host, scope) {
   const extra = h('div', { class: 'th-controls th-sub-controls' });
   const modeSeg = seg([['notes', 'All notes'], ['scale', 'A scale'], ['chord', 'A chord']], mode, (v) => { mode = v; setup(); }, 'Show');
   const setup = () => {
-    if (mode === 'notes') extra.replaceChildren(field('Show', whichSeg.el));
+    if (mode === 'notes') extra.replaceChildren(field('Notes', whichSeg.el));
     else extra.replaceChildren(field(mode === 'scale' ? 'Key' : 'Root', tonicSel.el), mode === 'scale' ? field('Scale', scaleSel.el) : field('Chord', chordSel.el), field('Labels', labelSeg.el));
     if (mode === 'scale') tonicSel.relabel((pc) => tonicName(scale, pc));
     else tonicSel.relabel((pc) => BOTH_NAMES[pc]);

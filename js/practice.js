@@ -107,7 +107,7 @@ export class ExercisePlayer {
     const items = [this.startBtn];
     if (def.kind !== 'match') items.push(h('label', { class: 'ctl', title: 'Listen first, then sing it back' }, echo, ' Listen → sing'));
     items.push(h('label', { class: 'ctl' }, 'Tempo ', tempo, ' ', bpmOut));
-    items.push(h('label', { class: 'ctl', title: 'Hide your pitch line while singing; see it afterwards. Builds independence from the screen.' }, blind, ' Blind'));
+    items.push(h('label', { class: 'ctl', title: 'Hide your pitch line while singing; see it afterwards. Builds independence from the screen.' }, blind, ' Hidden line'));
     if (def.thaatText || def.kind === 'match' || id === 'custom') {
       this.scaleKey = SCALES[settings.scale] ? settings.scale : 'major';
       const sel = h('select', { onchange: (e) => { this.scaleKey = e.target.value; this.preview(); } }, ...scaleList(settings).map((k) => h('option', { value: k, selected: k === this.scaleKey }, scaleLabel(k, settings))));
@@ -201,7 +201,7 @@ export class ExercisePlayer {
     pumpClicks();
     const groups = planCurves(this.plan, sa).map((g) => ({ ...g, start: g.start + this.T0, end: g.end + this.T0 }));
     guide.playCurves(groups);
-    const lat =mic.latencySec() + (c.outputLatency || 0) + (settings.latencyMs || 0) / 1000;
+    const lat = mic.latencySec() + (c.outputLatency || 0) + (settings.latencyMs || 0) / 1000;
     this.off = mic.on((f) => {
       const t = c.currentTime - this.T0 - lat;
       this.frames.push({ t, c: f.hz > 0 ? centsOf(f.hz, sa) : NaN });
@@ -295,7 +295,7 @@ export class ExercisePlayer {
     }));
     const bias = swaraBiasText(res.perSwara, 6);
     r.append(h('div', { class: 'result-top' }, big, stats), chips);
-    if (bias.length) r.append(h('p', { class: 'muted small' }, 'Per-swara tendency: ' + describeSwaraBias(bias.slice(0, 4))));
+    if (bias.length) r.append(h('p', { class: 'muted small' }, (isIndian(settings) ? 'Per-swara tendency: ' : 'Note by note: ') + describeSwaraBias(bias.slice(0, 4))));
     if (timing && Math.abs(timing.lag) >= 0.12) r.append(h('p', { class: 'muted small' }, timingText(timing)));
     r.append(tipList(res.tips.filter((t) => !/lag|behind|ahead/.test(t.title))));
     r.append(h('div', { class: 'row' }, h('button', { class: 'btn', onclick: () => this.start() }, icon('loop', 15), 'Again'), this.onNext ? h('button', { class: 'btn primary', onclick: () => this.onNext() }, 'Next →') : null));

@@ -96,10 +96,9 @@ function tempoDemo(host, scope) {
   });
   btn.el.addEventListener('click', () => (clock.running ? stop() : start()));
   scope.add(() => clock.stop());
-  host.append(controls(field('Style', styleSeg.el)),
+  host.append(controls(field('Style', styleSeg.el), h('div', { class: 'th-gap' }), revealBtn, btn.el),
     h('div', { class: 'th-tempo-big' }, h('div', { class: 'th-bignum' }, dot, num, h('small', {}, 'BPM')), pad),
-    tapText,
-    controls(btn.el, revealBtn));
+    tapText);
   show();
 }
 
@@ -423,6 +422,10 @@ function eqDemo(host, scope) {
     }
     g.fillStyle = colors.text;
     g.font = '11px ' + getComputedStyle(canvas).fontFamily;
+    if (!clock.running) {
+      g.textAlign = 'center'; g.textBaseline = 'middle';
+      g.fillText('Play the loop to see its spectrum', w / 2, (hgt - 16) / 2);
+    }
     g.textBaseline = 'bottom';
     const xOf = (f) => (Math.log(f / 30) / Math.log(16000 / 30)) * w;
     g.textAlign = 'left'; g.fillText('Low', 2, hgt);

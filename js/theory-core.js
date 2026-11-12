@@ -269,22 +269,24 @@ export const BARRE_EXAMPLES = {
 };
 
 // Movable shapes: E shape (root on the low E string) and A shape (root on the A string).
-const E_SHAPE = { maj: [[0, 2, 2, 1, 0, 0], [1, 3, 4, 2, 1, 1]], min: [[0, 2, 2, 0, 0, 0], [1, 3, 4, 1, 1, 1]] };
+// Diminished: root, ♭5, root, ♭3 on the four low strings (E shape) or R ♭5 R ♭3 from the A string.
+const E_SHAPE = { maj: [[0, 2, 2, 1, 0, 0], [1, 3, 4, 2, 1, 1]], min: [[0, 2, 2, 0, 0, 0], [1, 3, 4, 1, 1, 1]], dim: [[0, 1, 2, 0, -1, -1], [1, 2, 3, 1, 0, 0]] };
 const A_SHAPE = { maj: [[-1, 0, 2, 2, 2, 0], [0, 1, 3, 3, 3, 1]], min: [[-1, 0, 2, 2, 1, 0], [0, 1, 3, 4, 2, 1]], dim: [[-1, 0, 1, 2, 1, -1], [0, 1, 2, 4, 3, 0]] };
 
-const OPEN_EXTRA = { Adim: { frets: [-1, 0, 1, 2, 1, -1], fingers: [0, 0, 1, 3, 2, 0] } };
-
-// A playable shape for a triad: an open chord if there is one, otherwise a barre chord.
+// A playable shape for a triad: an open chord if there is one, otherwise a movable shape at
+// the lower of its two positions (an open-string version where the shape allows one).
 export function guitarShape(rootPc, q, name) {
-  if (SHAPES[name] || OPEN_EXTRA[name]) return SHAPES[name] || OPEN_EXTRA[name];
+  if (SHAPES[name]) return SHAPES[name];
   const fE = mod12(rootPc - 4), fA = mod12(rootPc - 9);
-  const useE = E_SHAPE[q] && (!A_SHAPE[q] || (fE > 0 && fE <= fA));
+  const openOk = q === 'dim'; // E and A major/minor are already open chords above
+  const useE = E_SHAPE[q] && (!A_SHAPE[q] || ((fE > 0 || openOk) && fE <= fA));
   const [tpl, fing] = useE ? E_SHAPE[q] : A_SHAPE[q] || A_SHAPE.maj;
-  const at = useE ? fE : fA || 12;
+  const at = useE ? fE : fA || (openOk ? 0 : 12);
   const frets = tpl.map((f) => (f < 0 ? -1 : f + at));
+  if (at === 0) return { frets, fingers: frets.map((f) => Math.max(0, f)) };
   const first = frets.findIndex((f) => f === at);
   const last = frets.length - 1 - [...frets].reverse().findIndex((f) => f === at);
-  return { frets, fingers: fing, barre: q === 'dim' ? null : { fret: at, from: first, to: last } };
+  return { frets, fingers: fing, barre: first === last ? null : { fret: at, from: first, to: last } };
 }
 
 // MIDI notes a shape sounds, per string (null = not played).

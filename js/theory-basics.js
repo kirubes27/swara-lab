@@ -263,7 +263,7 @@ function keysDemo(host) {
     const majPc = FIFTHS[sel.k], pc = minor ? mod12(majPc + 9) : majPc;
     const name = minor ? minName(pc) + ' minor' : majName(pc) + ' major';
     const s = keySignature(pc, minor);
-    w.center(minor ? minName(pc) + 'm' : majName(pc), s.count ? `${s.count}${s.kind === 'sharp' ? '♯' : '♭'}` : 'no ♯/♭');
+    w.center(minor ? minName(pc) + 'm' : majName(pc), minor ? 'minor' : 'major');
     w.state((ring, k) => {
       const d = (k - sel.k + 12) % 12;
       if (ring === sel.ring && k === sel.k) return 'is-sel';
@@ -395,7 +395,8 @@ function singingDemo(host, scope) {
   let tonic = Math.min(67, Math.max(43, settings.saMidi || 48)), drone = null, off = null, shown = NaN;
   const ladder = h('div', { class: 'th-ladder', role: 'group', 'aria-label': 'Scale degrees in your key' });
   const marker = h('div', { class: 'th-voice', 'aria-hidden': 'true' });
-  const live = readout('', '');
+  const IDLE = ['Hear it, then sing it', 'Press Sing and your voice appears on the ladder.'];
+  const live = readout(...IDLE);
   const rows = DEGREES.map((d) => {
     const b = h('button', { type: 'button', class: 'th-rung', style: `bottom:${(d.semis / 12) * 100}%`, onclick: () => playDeg(d) },
       h('strong', {}, d.deg), h('span', {}, d.sargam), h('span', { class: 'th-solfa' }, d.solfa), h('small', {}));
@@ -425,7 +426,7 @@ function singingDemo(host, scope) {
     marker.classList.remove('is-live');
     rows.forEach((r) => r.classList.remove('is-near'));
     micBtn.replaceChildren(ic('mic', 16), 'Sing'); micBtn.classList.add('primary'); micBtn.setAttribute('aria-pressed', 'false');
-    live.set('', '');
+    live.set(...IDLE);
   };
   micBtn.addEventListener('click', async () => {
     if (off) { stopMic(); return; }

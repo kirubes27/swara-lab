@@ -369,14 +369,14 @@ export function chordBox(shape, label = '') {
   });
   if (barre) {
     const y = Y(barre.fret - base + 0.5);
-    g.append(svg('rect', { x: X(barre.from) - 5.2, y: y - 5.2, width: X(barre.to) - X(barre.from) + 10.4, height: 10.4, rx: 5.2, class: 'th-box-dot' }));
+    g.append(svg('rect', { x: X(barre.from) - 5.6, y: y - 5.6, width: X(barre.to) - X(barre.from) + 11.2, height: 11.2, rx: 5.6, class: 'th-box-dot' }));
   }
   frets.forEach((f, s) => {
     if (f <= 0) return;
     const y = Y(f - base + 0.5);
     const inBarre = barre && f === barre.fret && s >= barre.from && s <= barre.to;
-    if (!inBarre) g.append(svg('circle', { cx: X(s), cy: y, r: 5.2, class: 'th-box-dot' }));
-    if (fingers[s] && (!inBarre || s === barre.from)) g.append(svg('text', { x: X(s), y: y + 3, class: 'th-box-num' }, fingers[s]));
+    if (!inBarre) g.append(svg('circle', { cx: X(s), cy: y, r: 5.6, class: 'th-box-dot' }));
+    if (fingers[s] && (!inBarre || s === barre.from)) g.append(svg('text', { x: X(s), y: y + 2.7, class: 'th-box-num' }, fingers[s]));
   });
   return g;
 }
