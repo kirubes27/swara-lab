@@ -23,6 +23,7 @@ export const DEFAULT_SETTINGS = {
   rangeHighMidi: null,
   octaveFree: true,
   showOrnaments: false, // song lines: plain notes vs notes with ornament symbols
+  headphones: false,     // with speakers, echo cancellation removes the song from the mic
   sepQuality: 'balanced', // voice separation: 'fast' (Spleeter), 'balanced' (Kim Vocal 2), 'best' (Mel-RoFormer)
   blind: false,
 };

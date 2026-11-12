@@ -153,7 +153,7 @@ export class PitchLane {
       if (u.t > t1) break;
       if (u.t > this.hideUserFrom) break;
       if (isNaN(u.c)) { p = null; continue; }
-      if (p && u.t - p.t < 0.09) {
+      if (p && u.t - p.t < 0.09 && Math.abs(u.c - p.c) < 300) { // never join across gaps or big leaps
         let col = T.text;
         const r = this.refAt ? this.refAt(u.t) : NaN;
         let d = NaN;

@@ -2,7 +2,7 @@
 import { audioCtx, mic } from './audio.js';
 import { tanpura } from './sound.js';
 import { settings, saveSettings, onSettings, progress, streak, minutesOn, dayKey, resetProgress, songs, lastSong, getSong } from './store.js';
-import { saHzFrom, westernName, hzToMidi, kattaiName, kaliSafedName, SWARA_LONG, SWARA_SHORT, DEGREE_LONG, scaleList, scaleLabel, isIndian, term } from './music.js';
+import { saHzFrom, westernName, hzToMidi, midiToHz, kattaiName, kaliSafedName, SWARA_LONG, SWARA_SHORT, DEGREE_LONG, scaleList, scaleLabel, isIndian, term } from './music.js';
 import { EXERCISES, WARMUP_ROUTINE, exText } from './exercises.js';
 import { ExercisePlayer } from './practice.js';
 import { SongStudio } from './song.js';
@@ -36,7 +36,16 @@ function renderHeader() {
   tb.classList.toggle('on', tanpura.on);
   $('#micBtn').classList.toggle('on', mic.running);
 }
+// Mic: plausible pitch range from the singer's range test, echo cancellation unless on headphones.
+function syncMic() {
+  mic.echoCancel = !settings.headphones;
+  const lo = settings.rangeLowMidi != null ? midiToHz(settings.rangeLowMidi - 7) : 70;
+  const hi = settings.rangeHighMidi != null ? midiToHz(settings.rangeHighMidi + 7) : 1100;
+  const hpf = settings.rangeLowMidi != null ? Math.min(100, Math.max(50, midiToHz(settings.rangeLowMidi) * 0.8)) : 70;
+  mic.setRange(Math.min(lo, 90), Math.max(hi, 600), hpf);
+}
 function setupHeader() {
+  syncMic();
   tanpura.kindFn = () => (settings.droneSound === 'auto' || !settings.droneSound ? (isIndian(settings) ? 'tanpura' : 'pad') : settings.droneSound);
   $('#tanpuraBtn').addEventListener('click', () => {
     audioCtx();
@@ -64,6 +73,8 @@ function setupHeader() {
     }
     if ('tanpuraVol' in patch) tanpura.setVolume(settings.tanpuraVol);
     if ('micSens' in patch) mic.setSensitivity(settings.micSens);
+    if ('rangeLowMidi' in patch || 'rangeHighMidi' in patch) syncMic();
+    if ('headphones' in patch) mic.setEchoCancel(!settings.headphones).then(renderHeader);
     if ('notation' in patch || 'tuning' in patch) {
       for (const k of ['player', 'warm', 'free', 'range']) { if (pages[k] && pages[k].stop) pages[k].stop(); pages[k] = null; }
       if (pages.song && pages.song.song) { pages.song.refreshKey(); pages.song.renderPhrases(); }
@@ -312,6 +323,7 @@ function renderSettings() {
     h('div', { class: 'card form' },
       h('h3', {}, 'Audio'),
       field('Voice separation', sel('sepQuality', [['fast', 'Fast: Spleeter, about a minute'], ['balanced', 'Balanced: Kim Vocal 2, seconds with a graphics card'], ['best', 'Best: Mel-RoFormer, 464 MB download once, a few minutes (needs a graphics card)']]), 'Used when a song is analysed. In testing on 50 real songs: Fast traced 72% of sung notes correctly, Balanced 87%, Best (Mel-RoFormer blended with Kim) 90%, with fewer false notes.'),
+      field('Headphones', h('span', {}, chk('headphones'), ' I sing with headphones'), 'With speakers, leave this off: echo cancellation removes the song from your microphone so it isn\'t mistaken for your voice. With headphones, switch it on for the cleanest pitch.'),
       field('Mic sensitivity', range('micSens', 0, 1, 0.05, (v) => Math.round(v * 100) + '%'), 'Raise it if quiet singing isn\'t detected; lower it if room noise is drawn as pitch.'),
       field('Guide volume', range('guideVol', 0, 1, 0.05, (v) => Math.round(v * 100) + '%')),
       field('Guide sound', sel('guideTimbre', [['reed', 'Harmonium-like'], ['sine', 'Pure tone']])),

@@ -91,6 +91,7 @@ export class Yin {
       running += d[tau];
       d[tau] = running > 0 ? d[tau] * tau / running : 1;
     }
+    // first dip under the threshold, followed down to its local minimum
     let tau = -1;
     for (let t = tauMin; t < tauMax; t++) {
       if (d[t] < this.threshold) {
@@ -100,12 +101,14 @@ export class Yin {
       }
     }
     if (tau < 0) {
-      // fall back to global min if it is reasonably periodic
+      // fallback: the deepest local minimum strictly inside the range, only if clearly periodic
       let best = 1, bt = -1;
-      for (let t = tauMin; t < tauMax; t++) if (d[t] < best) { best = d[t]; bt = t; }
-      if (best > 0.3) return null;
+      for (let t = tauMin + 1; t < tauMax - 2; t++) if (d[t] < best && d[t] <= d[t - 1] && d[t] <= d[t + 1]) { best = d[t]; bt = t; }
+      if (bt < 0 || best > 0.22) return null;
       tau = bt;
     }
+    // a "pitch" at the very edge of the search range is noise or rumble, not a voice
+    if (tau >= tauMax - 2 || tau <= tauMin) return null;
     // parabolic interpolation
     let betterTau = tau;
     if (tau > 1 && tau < tauMax) {

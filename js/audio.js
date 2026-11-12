@@ -24,8 +24,23 @@ export class Mic {
     this.running = false;
     this.last = null;      // latest {t, hz, clarity, level}
     this.level = 0;
-    this.gate = 0.008;     // rms gate
-    this.hist = [];
+    this.gate = 0.008;     // rms gate set by the sensitivity slider
+    this.floor = 0;        // slowly adapting background level
+    this.echoCancel = true; // cancels the song when it plays through speakers
+    this.lowHz = 70; this.highHz = 1100;
+    this.acc = null;       // last accepted pitch {hz, t}
+    this.pend = null;      // a big jump waiting for confirmation {hz, n}
+  }
+  // Limit detection to a plausible singing range (widened around the singer's measured range).
+  setRange(lowHz, highHz, hpfHz = 70) {
+    this.lowHz = Math.max(55, lowHz); this.highHz = Math.min(1500, highHz); this.hpfHz = hpfHz;
+    if (this.hpf) for (const f of this.hpf) f.frequency.value = hpfHz;
+    if (this.yin) this.yin = new Yin(audioCtx().sampleRate, { minHz: this.lowHz * 0.94, maxHz: this.highHz * 1.06, threshold: 0.15 });
+  }
+  async setEchoCancel(on) {
+    if (on === this.echoCancel) return;
+    this.echoCancel = on;
+    if (this.running) { this.stop(); await this.start(); }
   }
   start() {
     if (this.running) return Promise.resolve();
@@ -35,15 +50,19 @@ export class Mic {
   async _start() {
     const c = audioCtx();
     this.stream = await navigator.mediaDevices.getUserMedia({
-      audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false, channelCount: 1 },
+      audio: { echoCancellation: this.echoCancel, noiseSuppression: false, autoGainControl: false, channelCount: 1 },
     });
     this.src = c.createMediaStreamSource(this.stream);
     this.analyser = c.createAnalyser();
     this.analyser.fftSize = 2048;
     this.analyser.smoothingTimeConstant = 0;
-    this.src.connect(this.analyser);
+    // 4th-order high-pass below the voice: removes bass, rumble and handling noise that would
+    // otherwise be mistaken for very low notes (tested: 26 → 638 of 718 frames right with bass bleed)
+    this.hpf = [0, 1].map(() => { const f = c.createBiquadFilter(); f.type = 'highpass'; f.frequency.value = this.hpfHz || 70; f.Q.value = 0.707; return f; });
+    this.src.connect(this.hpf[0]); this.hpf[0].connect(this.hpf[1]); this.hpf[1].connect(this.analyser);
     this.buf = new Float32Array(this.analyser.fftSize);
-    this.yin = new Yin(c.sampleRate, { minHz: 65, maxHz: 1100, threshold: 0.15 });
+    this.yin = new Yin(c.sampleRate, { minHz: this.lowHz * 0.94, maxHz: this.highHz * 1.06, threshold: 0.15 });
+    this.acc = null; this.pend = null; this.floor = 0;
     this.running = true;
     const loop = () => {
       if (!this.running) return;
@@ -66,20 +85,32 @@ export class Mic {
     this.analyser.getFloatTimeDomainData(this.buf);
     const level = rms(this.buf);
     this.level = level;
-    let hz = 0, clarity = 0;
-    if (level > this.gate) {
-      const r = this.yin.detect(this.buf);
-      if (r && r.clarity > 0.6) { hz = r.hz; clarity = r.clarity; }
-    }
-    // median-of-3 to remove isolated octave blips
-    this.hist.push(hz); if (this.hist.length > 3) this.hist.shift();
-    let out = hz;
-    if (this.hist.length === 3 && this.hist.every((x) => x > 0)) {
-      const s = [...this.hist].sort((a, b) => a - b); out = s[1];
-    } else if (hz > 0 && this.hist.filter((x) => x > 0).length === 1 && this.hist.length === 3) {
-      out = 0; // isolated voiced frame
-    }
     const now = performance.now();
+    // background level: drops at once to quiet moments, rises only slowly (~10 s), so a long
+    // sustained note is never mistaken for background noise
+    this.floor = !this.floor || level < this.floor ? level : this.floor + (level - this.floor) * 0.0015;
+    let hz = 0, clarity = 0;
+    if (level > Math.max(this.gate, this.floor * 2)) {
+      const r = this.yin.detect(this.buf);
+      if (r && r.clarity > 0.65 && r.hz >= this.lowHz * 0.94 && r.hz <= this.highHz * 1.06) { hz = r.hz; clarity = r.clarity; }
+    }
+    // Jump confirmation against the recent context (median of what was sung in the last 1.5 s):
+    // a leap of more than ~3.5 semitones is only believed once it repeats (2 frames; ~6 frames for
+    // an octave or more). Real leaps survive with a tiny delay; blips from consonants, drum hits or
+    // the song bleeding into the mic don't, and a stray blip can't drag the reference with it.
+    this.ctxp = (this.ctxp || []).filter((p) => now - p.t < 1500);
+    let out = 0;
+    if (hz > 0) {
+      let ref = null;
+      if (this.ctxp.length >= 5) { const v = this.ctxp.map((p) => p.hz).sort((a, b) => a - b); ref = v[v.length >> 1]; }
+      else if (this.acc && now - this.acc.t < 160) ref = this.acc.hz;
+      const jump = ref ? Math.abs(1200 * Math.log2(hz / ref)) : 0;
+      if (!ref || jump < 350) { out = hz; this.pend = null; }
+      else if (this.pend && Math.abs(1200 * Math.log2(hz / this.pend.hz)) < 80) {
+        if (++this.pend.n >= (jump > 900 ? 6 : 2)) { out = hz; this.pend = null; this.ctxp = []; } // a confirmed leap starts a new context
+      } else this.pend = { hz, n: 1 };
+      if (out) { this.acc = { hz: out, t: now }; this.ctxp.push({ hz: out, t: now }); }
+    } else this.pend = null;
     this.last = { t: now, hz: out, clarity, level };
     for (const fn of this.listeners) fn(this.last);
   }
