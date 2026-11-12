@@ -404,6 +404,7 @@ details.more[open] summary { margin-bottom: 12px; }
 /* coach mode: the line coach takes over the page */
 .coach-head[hidden], .coach-bar[hidden], .coach-out[hidden] { display: none; }
 .studio.coaching .studio-head, .studio.coaching .add-box, .studio.coaching .transport, .studio.coaching .lower, .studio.coaching canvas.overview, .studio.coaching .learn-pill { display: none !important; }
+@media (max-width: 1020px) { .studio.coaching .lyrics { display: none !important; } } /* the coach header already shows the words */
 
 /* popovers, menus, sheets */
 .pop { position: fixed; z-index: 70; min-width: 230px; max-width: min(340px, calc(100vw - 16px)); padding: 6px; border-radius: 14px; background: color-mix(in srgb, var(--surface) 94%, transparent); -webkit-backdrop-filter: blur(24px) saturate(180%); backdrop-filter: blur(24px) saturate(180%); box-shadow: var(--shadow-lg), 0 0 0 .5px var(--hair2); animation: popin .16s var(--ease); }

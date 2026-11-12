@@ -355,7 +355,7 @@ export class RiffCoach {
     }
     const score = scored.score;
     const notes = noteResults(this.notesIn(sp), fr, s.refAt, { tol: settings.tol, octaveFree: settings.octaveFree });
-    const found = ctx.hard ? null : this.worthDrilling(hardestSpan(notes));
+    const found = ctx.hard ? null : this.worthDrilling(hardestSpan(notes), notes);
     const field = ctx.step;
     if (ctx.hard) {
       if (!(this.hardBest[field] >= score)) this.hardBest[field] = score;
@@ -380,10 +380,13 @@ export class RiffCoach {
     this.syncBar();
     this.renderOut();
   }
-  // Drilling only pays off when the hard part is clearly shorter than the line.
-  worthDrilling(f) {
-    if (!f) return null;
-    return f.b - f.a < 0.8 * (this.line.b - this.line.a) ? f : null;
+  // Drilling a part pays off when it is clearly shorter than the line and the rest mostly works;
+  // when most of the line is off, the line itself (slower, or a step back) is the thing to practise.
+  worthDrilling(f, notes) {
+    if (!f || f.b - f.a >= 0.8 * (this.line.b - this.line.a)) return null;
+    const rest = notes.filter((n) => n.n < f.from || n.n > f.to);
+    const fine = rest.filter((n) => n.status === 'good' || n.status === 'ok').length;
+    return rest.length && fine >= rest.length / 2 ? f : null;
   }
 
   drill(f) {

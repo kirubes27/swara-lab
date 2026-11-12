@@ -420,9 +420,12 @@ export class SongStudio {
       toast(this.player && this.player.kind === 'audio' ? 'Analyse the song first. That step separates the voice from the music.' : this.song && this.song.hasCopy ? 'Switch the source to the recorded copy to hear the voice or the backing on their own.' : 'Voice only and backing need the song\'s audio: import a file, or capture the YouTube song once.', 'info', 6000);
       return;
     }
-    if (!this.player || this.player.kind !== 'audio') { this.sound = 'mix'; this.syncTransport(); return; }
+    if (!this.player || this.player.kind !== 'audio') { this.sound = 'mix'; this.soundTarget = 'mix'; this.syncTransport(); return; }
+    this.soundTarget = mode;
     this.setStatus(mode === 'mix' ? '' : mode === 'vocals' ? 'Preparing the voice…' : 'Preparing the backing track…');
-    await this.player.setSound(mode);
+    const player = this.player;
+    await player.setSound(mode);
+    if (this.soundTarget !== mode || this.player !== player) return; // a newer choice (or another song) took over
     this.sound = mode; this.setStatus(''); this.syncTransport();
   }
   openMode(anchor) { menu(anchor, MODES.map(([v, label, sub]) => ({ label, sub, checked: this.mode === v, onclick: () => this.setMode(v) }))); }
@@ -625,9 +628,13 @@ export class SongStudio {
         try { const { RiffCoach } = await import('./riff.js'); if (!this.coach.open) this.coach = new RiffCoach(this); }
         catch (e) { console.error(e); toast('The line coach couldn\'t load.', 'bad'); location.replace('#songs'); return; }
       }
-      if (this.coach.active) this.coach.close();
+      if (this.coach.active) this.closeCoach();
       this.coach.open(range);
-    } else if (this.coach.active) this.coach.close();
+    } else if (this.coach.active) this.closeCoach();
+  }
+  closeCoach() {
+    this.coach.close();
+    this.syncLoopUI(); this.renderPhrases(); this.syncTransport();
   }
   learnRange(a, b, phrase) { location.hash = '#songs/learn/' + (phrase != null ? phrase : `${a.toFixed(2)}-${b.toFixed(2)}`); }
   learnLoop() {
@@ -652,7 +659,7 @@ export class SongStudio {
   }
   async open(id) {
     if (this.guardBusy()) return;
-    if (this.coach.active) { this.coach.close(); if (/^#songs\/learn/.test(location.hash)) history.replaceState(null, '', '#songs'); }
+    if (this.coach.active) { this.closeCoach(); if (/^#songs\/learn/.test(location.hash)) history.replaceState(null, '', '#songs'); }
     closePopover();
     this.resetTake();
     if (this.player) { this.player.destroy(); this.player = null; }
@@ -672,7 +679,7 @@ export class SongStudio {
     this.source = s.kind === 'audio' ? 'audio' : (s.useCopy && s.hasCopy ? 'audio' : 'youtube');
     this.refreshTitle();
     this.loop = null; this.pendingA = null; this.loopOn = false; this.syncLoopUI();
-    this.sound = 'mix'; this.syncTransport();
+    this.sound = 'mix'; this.soundTarget = 'mix'; this.syncTransport();
     await this.mountPlayer();
     if (token !== this.openToken) return; // a newer open() took over
     await this.loadMelody();
@@ -709,7 +716,7 @@ export class SongStudio {
       this.playerBox.append(h('div', { class: 'audio-cover' }, h('div', { class: 'ac-ic' }, icon('songs', 22)), h('div', { class: 'ac-text' }, h('strong', {}, s.title), h('small', {}, s.kind === 'youtube' ? 'Recorded copy of the video' : 'Audio file · ' + fmtTime(this.player.duration())))));
       const stem = await idbGet('audio', s.id + ':vocals');
       if (stem && this.player) this.player.setVocals(fromI16(stem));
-      this.sound = 'mix'; this.syncTransport();
+      this.sound = 'mix'; this.soundTarget = 'mix'; this.syncTransport();
       if (s.transpose) await this.player.setTranspose(s.transpose);
     }
     this.player.setRate(this.speed);
@@ -994,18 +1001,21 @@ export class SongStudio {
   }
   frameStep(c, lastRange, setLastRange) {
     const p = this.player;
-    const t = p ? p.time() : 0;
-    const playing = !!(p && p.playing);
+    let t = p ? p.time() : 0;
+    let playing = !!(p && p.playing);
     const coaching = !!this.coach.active;
-    if (this.timeEl) this.timeEl.textContent = fmtTime(t) + ' / ' + fmtTime(p ? p.duration() : 0);
-    // looping
+    // looping: after jumping back, read the time again so nothing from the old pass is stamped on the new one
+    let wrapped = false;
     if (playing && this.loopOn && this.loop && t >= this.loop.b) {
       if (coaching) this.coach.passEnd();
       else { this.finishTake(); p.seek(this.loop.a); }
+      wrapped = true; t = p.time(); playing = !!p.playing;
+      this.lastMicFrame = mic.last; // the sample in hand was sung at the end of the old pass
     }
+    if (this.timeEl) this.timeEl.textContent = fmtTime(t) + ' / ' + fmtTime(p ? p.duration() : 0);
     if (coaching && this.coach.frame) this.coach.frame(t, playing);
     // mic frames
-    if (mic.running && mic.last && playing && !this.capturing && this.collect !== false) {
+    if (!wrapped && mic.running && mic.last && playing && !this.capturing && this.collect !== false) {
       const f = mic.last;
       if (f !== this.lastMicFrame) {
         this.lastMicFrame = f;
