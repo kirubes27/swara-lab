@@ -440,6 +440,7 @@ export class SongStudio {
     const hp = h('input', { type: 'checkbox', checked: !!settings.headphones, 'aria-label': 'Headphones', onchange: (e) => saveSettings({ headphones: e.target.checked }) });
     menu(anchor, [
       ...SOUNDS.map(([v, label]) => ({ label, checked: (this.sound || 'mix') === v, disabled: v !== 'mix' && !ok, sub: v === 'mix' ? null : !ok ? why : v === 'vocals' ? 'The singer on their own' : 'Everything except the singer', onclick: () => this.setSound(v) })),
+      ok && this.song && this.song.stemModel === 'spleeter' ? { head: 'Split with the Fast model. For a cleaner voice and backing, pick Balanced or Best in ⋯ and analyse again.' } : null,
       'sep',
       { el: h('label', { class: 'menu-switch' }, h('span', { class: 'mi-text' }, h('span', {}, 'Guide tone'), h('small', {}, 'The melody as a clear tone (G)')), sw) },
       { el: h('label', { class: 'menu-switch' }, h('span', { class: 'mi-text' }, h('span', {}, 'Headphones'), h('small', {}, 'On when you listen with headphones: cleaner tracking')), hp) },
@@ -1356,7 +1357,7 @@ export class SongStudio {
           if (savedCopy) {
             await idbPut('melody', song.id + ':audio', packMelody(res.mel));
             await idbPut('audio', song.id + ':vocals', toI16(res.vocals));
-            song.audioSeparated = true;
+            song.audioSeparated = true; song.stemModel = res.model;
           }
           upsertSong(song);
         }
@@ -1380,7 +1381,8 @@ export class SongStudio {
     this.busy = true;
     this.showProgress('prepare', 0);
     try {
-      const { mel, vocals, separated } = await analyzeBlob(blob, (p, step, d) => { if (this.song === song) this.showProgress(step, p, d); });
+      const { mel, vocals, separated, model } = await analyzeBlob(blob, (p, step, d) => { if (this.song === song) this.showProgress(step, p, d); });
+      song.stemModel = model;
       await idbPut('melody', song.id + ':audio', packMelody(mel));
       if (vocals) await idbPut('audio', song.id + ':vocals', toI16(vocals));
       song.audioSa = null; song.audioSeparated = separated;
