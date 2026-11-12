@@ -6,8 +6,9 @@ import { PitchLane, Overview } from './lane.js';
 import { SalienceAnalyzer, trackMelody, melodyAt, melodyDuration, estimateTonic, findPhrases, F_REF } from './melody.js';
 import { analyzeTake, transcribe, fitToRange, swaraBiasText, describeSwaraBias } from './coach.js';
 import { settings, saveSettings, songs, getSong, upsertSong, removeSong, lastSong, idbGet, idbPut, packMelody, unpackMelody, logActivity } from './store.js';
-import { westernName, hzToMidi, midiToHz, kattaiName, kaliSafedName, percentile, saHzFrom, isIndian, term } from './music.js';
-import { h, toast, ensureMic, tipList, fmtTime } from './ui.js';
+import { westernName, hzToMidi, percentile, saHzFrom, isIndian } from './music.js';
+import { h, toast, ensureMic, tipList, fmtTime, menu, popover, sheet, closePopover } from './ui.js';
+import { LyricsPanel } from './lyrics.js';
 import { LiveReadout, stat } from './practice.js';
 import { icon } from './icons.js';
 
@@ -64,6 +65,7 @@ class YTPlayer {
   }
   setRate(r) { this.r = r; this.ok && this.p.setPlaybackRate(r); }
   mute(m) { if (!this.ok) return; m ? this.p.mute() : this.p.unMute(); }
+  setVolume(v) { this.ok && this.p.setVolume(Math.round(Math.max(0, Math.min(1, v)) * 100)); }
   duration() { return this.ok ? this.p.getDuration() || 0 : 0; }
   title() { try { return this.p.getVideoData().title; } catch { return ''; } }
   time() {
@@ -113,6 +115,7 @@ class AudioPlayer {
   seek(t) { if (isFinite(t)) this.a.currentTime = Math.max(0, t / this.factor); }
   setRate(r) { this.r = r; this.a.playbackRate = r / this.factor; }
   mute(m) { this.a.muted = m; }
+  setVolume(v) { this.a.volume = Math.max(0, Math.min(1, v)); }
   duration() { const d = this.a.duration; return (isFinite(d) ? d : 0) * this.factor; } // MediaRecorder WebM reports Infinity
   time() { return this.a.currentTime * this.factor; }
   async decoded() {
@@ -170,7 +173,27 @@ const MODELS = {
   // 464 MB: too big for GitHub Pages, so fetched from Hugging Face at the exact revision that was benchmarked
   roformer: 'https://huggingface.co/audiojs/mel-roformer/resolve/c1aba02c00a0bee852d6754fe6ede8164f90a4b3/mel-roformer.fp16.onnx',
 };
-const HAS_GPU = typeof navigator !== 'undefined' && !!navigator.gpu;
+// WebGPU: the API can exist without a usable graphics adapter (common on Linux), so ask for one.
+let HAS_GPU = typeof navigator !== 'undefined' && !!navigator.gpu;
+const gpuChecked = (async () => {
+  try { HAS_GPU = !!(navigator.gpu && (await navigator.gpu.requestAdapter())); } catch { HAS_GPU = false; }
+  return HAS_GPU;
+})();
+// The quality actually used: without a graphics card the larger models take many minutes per song,
+// so Fast is the default there unless the person picked a quality themselves.
+function effectiveQuality() {
+  const q = settings.sepQuality || 'balanced';
+  if (!HAS_GPU && !settings.sepQualityChosen) return 'fast';
+  if (q === 'best' && !HAS_GPU) return 'balanced';
+  return q;
+}
+function pickQuality(v) { saveSettings({ sepQuality: v, sepQualityChosen: true }); }
+function qualitySub(v, tip) {
+  if (HAS_GPU) return tip;
+  if (v === 'best') return 'Needs a graphics card (WebGPU) in this browser';
+  if (v === 'balanced') return '~87% of notes · slow without a graphics card: many minutes per song';
+  return tip;
+}
 let activeSep = null; // the running separation worker (to ask it for the faster model)
 export function useFastModel() { if (activeSep) activeSep.postMessage({ fast: true }); }
 function runWorker(url, msg, transfer, onProgress) {
@@ -189,12 +212,13 @@ function runWorker(url, msg, transfer, onProgress) {
 // Separate the voice from the music (Spleeter, in a worker), then track pitch on the voice alone.
 // Falls back to the mix-based tracker if separation can't run in this browser.
 async function analyzeBlob(blob, onProgress) {
+  await gpuChecked;
   const c = audioCtx();
   const buf = await c.decodeAudioData(await blob.arrayBuffer());
   try {
     const b44 = await renderRate(buf, 1, 44100);
     const L = b44.getChannelData(0).slice(), R = (b44.numberOfChannels > 1 ? b44.getChannelData(1) : b44.getChannelData(0)).slice();
-    const r = await runWorker('./sep-worker.js', { L, R, models: MODELS, prefer: settings.sepQuality || 'balanced', testEP: self.__swaraTestEP }, [L.buffer, R.buffer], onProgress);
+    const r = await runWorker('./sep-worker.js', { L, R, models: MODELS, prefer: effectiveQuality(), testEP: self.__swaraTestEP }, [L.buffer, R.buffer], onProgress);
     return { mel: r.mel, vocals: r.vocals, separated: true, model: r.model };
   } catch (err) {
     console.warn('vocal separation unavailable, using mix-based tracking:', err);
@@ -242,21 +266,10 @@ const cAbove55 = (hz) => 1200 * Math.log2(hz / F_REF);
 
 // Voice-separation quality (remembered in settings): Fast = Spleeter, Balanced = Kim Vocal 2, Best = Mel-RoFormer.
 const QUALITY = [
-  ['fast', 'Fast', 'Spleeter · about a minute · catches ~72% of notes'],
-  ['balanced', 'Balanced', 'Kim Vocal 2 · seconds with a graphics card · ~87% of notes'],
-  ['best', 'Best', 'Mel-RoFormer + Kim Vocal 2 · 464 MB download once · a few minutes · ~90% of notes, fewest false notes'],
+  ['fast', 'Fast', 'Spleeter · ~72% of notes · about a minute'],
+  ['balanced', 'Balanced', 'Kim Vocal 2 · ~87% of notes · seconds with a graphics card'],
+  ['best', 'Best', 'Mel-RoFormer + Kim · ~90% of notes · 464 MB once, a few minutes'],
 ];
-function qualitySeg(onpick) {
-  const el = h('div', { class: 'seg quality' });
-  const cur = settings.sepQuality || 'balanced';
-  for (const [v, label, tip] of QUALITY) {
-    const off = v === 'best' && !HAS_GPU;
-    el.append(h('button', { class: cur === v ? 'on' : '', 'data-q': v, disabled: off, title: off ? 'Best needs a browser with WebGPU (Chrome or Edge on a computer with a graphics card).' : tip,
-      onclick: (e) => { saveSettings({ sepQuality: v }); [...el.children].forEach((b) => b.classList.toggle('on', b === e.currentTarget)); onpick && onpick(v); } }, label));
-  }
-  return el;
-}
-function qualityHint(v) { const q = QUALITY.find((x) => x[0] === (v || 'balanced')); return q ? q[2] : ''; }
 
 // Plain reading of a transcription: the held notes only, no ornament symbols.
 function simpleNotes(toks) {
@@ -270,144 +283,383 @@ function simpleNotes(toks) {
 }
 
 // ---------------------------------------------------------------------------
+const MODES = [
+  ['along', 'Sing along', 'Hear the song while you sing'],
+  ['muted', 'Solo', 'The song is muted; the guide tone can lead you'],
+  ['blind', 'Hidden line', 'Your line appears after each pass, not during it'],
+];
+const SPEEDS = [0.5, 0.6, 0.75, 0.85, 1];
+const SOUNDS = [['mix', 'Original'], ['vocals', 'Voice only'], ['karaoke', 'Backing track']];
+const fmtSpeed = (v) => (v === 1 ? '1×' : v + '×');
+const signed = (x) => (x > 0 ? '+' : x < 0 ? '−' : '') + Math.abs(Math.round(x));
+const pct = (x) => Math.round(x * 100) + '%';
+
 export class SongStudio {
   constructor(root) {
     this.root = root;
     this.song = null; this.player = null; this.mel = null; this.source = 'youtube';
-    this.speed = 1; this.loopOn = false; this.loop = null; this.mode = 'along'; this.guideOn = false;
+    this.speed = 1; this.loopOn = false; this.loop = null; this.mode = 'along'; this.guideOn = false; this.sound = 'mix';
     this.follower = new Follower();
     this.frames = []; this.takeStart = null; this.phrases = [];
+    this.collect = true;
+    this.coach = { active: false }; // the line coach loads on first use (js/riff.js)
     this.build();
+    this.lyrics = new LyricsPanel(this.lyricsEl, this);
+    import('./device.js').then((m) => (this.device = m)).catch(() => {}); // browser checks (tab capture support)
   }
 
   // ---- layout ---------------------------------------------------------------
   build() {
     const r = this.root;
-    r.innerHTML = '';
-    this.sel = h('select', { class: 'song-select', 'aria-label': 'Song', onchange: (e) => this.open(e.target.value) });
-    const addBtn = h('button', { class: 'btn primary', onclick: () => this.addBox.classList.toggle('open') }, icon('plus', 16), 'Add song');
-    this.ytInput = h('input', { type: 'url', placeholder: 'Paste a YouTube link', class: 'grow' });
-    const fileIn = h('input', { type: 'file', accept: 'audio/*,video/*', style: 'display:none', onchange: (e) => e.target.files[0] && this.addFile(e.target.files[0]) });
+    r.innerHTML = ''; r.classList.add('studio');
+    // header: the song is the title; everything else is a chip or a menu
+    this.titleText = h('span', { class: 'st-text' }, 'Songs');
+    this.titleBtn = h('button', { class: 'song-title', 'aria-haspopup': 'menu', title: 'Your songs', onclick: (e) => this.openLibrary(e.currentTarget) }, this.titleText, icon('down', 22));
+    this.subEl = h('span', { class: 'song-sub' });
+    this.chipsEl = h('div', { class: 'chips' });
+    this.statusEl = h('span', { class: 'status-line', role: 'status', 'aria-live': 'polite' });
+    this.head = h('header', { class: 'studio-head' },
+      h('div', { class: 'sh-text' }, h('div', { class: 'eyebrow' }, 'Songs'), this.titleBtn, h('div', { class: 'song-meta' }, this.subEl, this.chipsEl)),
+      h('div', { class: 'sh-act' }, this.statusEl,
+        h('button', { class: 'btn small', onclick: () => this.toggleAdd() }, icon('plus', 15), 'Add song'),
+        h('button', { class: 'icon-btn', 'aria-label': 'More options', title: 'More', 'aria-haspopup': 'menu', onclick: (e) => this.openMore(e.currentTarget) }, icon('more', 20))));
+    // adding a song
+    this.ytInput = h('input', { type: 'url', placeholder: 'Paste a YouTube link', class: 'grow', 'aria-label': 'YouTube link', onkeydown: (e) => { if (e.key === 'Enter') this.addUrl(this.ytInput.value); } });
+    const fileIn = h('input', { type: 'file', accept: 'audio/*,video/*', hidden: true, onchange: (e) => e.target.files[0] && this.addFile(e.target.files[0]) });
     const row = (ic, title, sub, onclick) => h('button', { class: 'li', onclick }, h('span', { class: 'li-ic' }, icon(ic, 18)), h('span', { class: 'li-text' }, h('strong', {}, title), h('small', {}, sub)), h('span', { class: 'li-end' }, icon('chevron', 16)));
     this.addBox = h('div', { class: 'add-box' },
       h('div', { class: 'list' },
-        row('upload', 'Import an audio file', 'MP3, M4A, WAV… Songs you own, karaoke tracks, recordings.', () => fileIn.click()),
-        row('record', 'Record from another tab', 'Play the song in another Chrome tab (Spotify, YouTube…) and record it here.', () => this.recordOtherTab()),
-        h('div', { class: 'yt-row' }, h('span', { class: 'li-ic' }, icon('link', 18)), this.ytInput, h('button', { class: 'btn', onclick: () => this.addUrl(this.ytInput.value) }, 'Add'))),
-      fileIn,
-      h('p', { class: 'muted small' }, 'Recordings and files stay in this browser and are only used for your practice.'));
-    this.playerBox = h('div', { class: 'player-box' });
-    this.info = h('div', { class: 'song-info' });
-    this.overviewCanvas = h('canvas', { class: 'overview', title: 'Click to jump · drag to loop a section' });
+        h('div', { class: 'yt-row' }, h('span', { class: 'li-ic' }, icon('link', 18)), this.ytInput, h('button', { class: 'btn primary small', onclick: () => this.addUrl(this.ytInput.value) }, 'Add')),
+        row('upload', 'Import an audio file', 'MP3, M4A, WAV or a video file', () => fileIn.click()),
+        row('record', 'Record from another tab', 'Spotify, YouTube Music, any site playing in Chrome', () => this.recordOtherTab())),
+      fileIn);
+    // stage: the pitch lane on the left, the video and the lyrics beside it
+    this.overviewCanvas = h('canvas', { class: 'overview', title: 'Click to jump · drag to loop' });
     this.laneCanvas = h('canvas', { class: 'lane tall' });
     const ro = h('div');
-    this.chip = h('div', { class: 'phase-chip' });
-    this.laneWrap = h('div', { class: 'lane-wrap' }, this.laneCanvas, ro, this.chip);
+    this.learnBtn = h('button', { class: 'btn small learn learn-pill', hidden: true, title: 'Step-by-step coaching for this part', onclick: () => this.learnLoop() }, icon('target', 15), 'Learn this part');
+    this.overlay = h('div', { class: 'lane-overlay', hidden: true });
+    this.laneWrap = h('div', { class: 'lane-wrap' }, this.laneCanvas, ro, this.learnBtn, this.overlay);
     this.readout = new LiveReadout(ro);
     this.transport = h('div', { class: 'transport' });
+    this.coachBar = h('div', { class: 'coach-bar', hidden: true });
+    this.playerBox = h('div', { class: 'player-box' });
+    this.lyricsEl = h('section', { class: 'lyrics', 'aria-label': 'Lyrics' });
+    this.stage = h('div', { class: 'stage' },
+      h('div', { class: 'stage-main' }, this.overviewCanvas, this.laneWrap, this.transport, this.coachBar),
+      h('aside', { class: 'stage-side' }, this.playerBox, this.lyricsEl));
+    // below: the song's lines and the last take
     this.phraseBox = h('div', { class: 'phrases' });
+    this.linesTools = h('div', { class: 'panel-tools' });
     this.feedback = h('div', { class: 'feedback' });
-    this.tools = h('details', { class: 'tools' });
-    r.append(
-      h('div', { class: 'page-head' }, h('h1', {}, 'Songs'), h('p', { class: 'lead' }, 'Pick a song, loop one line at a time, and sing against the original melody.')),
-      h('div', { class: 'row song-top' }, this.sel, addBtn, h('button', { class: 'btn ghost', title: 'Remove this song from the library', onclick: () => this.remove() }, icon('trash', 16), 'Remove')),
-      this.addBox,
-      h('div', { class: 'song-grid' }, this.playerBox, this.info),
-      this.overviewCanvas, this.laneWrap, this.transport,
-      h('div', { class: 'song-cols' }, h('div', {}, h('h3', {}, 'Lines'), this.phraseBox), h('div', {}, h('h3', {}, 'Last take'), this.feedback)),
-      this.tools,
-    );
+    this.lower = h('div', { class: 'lower' },
+      h('section', { class: 'panel lines-panel' }, h('div', { class: 'panel-head' }, h('h3', {}, 'Lines'), this.linesTools), this.phraseBox),
+      h('section', { class: 'panel take-panel' }, h('div', { class: 'panel-head' }, h('h3', {}, 'Last take')), this.feedback));
+    // "Learn this line" reuses the stage; these hold its header, controls and results
+    this.coachHead = h('div', { class: 'coach-head', hidden: true });
+    this.coachOut = h('div', { class: 'coach-out', hidden: true });
+    r.append(this.head, this.addBox, this.coachHead, this.stage, this.coachOut, this.lower);
     this.lane = new PitchLane(this.laneCanvas);
     this.lane.past = 2.5; this.lane.future = 5;
-    this.overview = new Overview(this.overviewCanvas, {
-      onSeek: (t) => { this.player && this.player.seek(t); },
-      onLoop: (a, b) => this.setLoop(a, b, true),
-    });
+    this.overview = new Overview(this.overviewCanvas, { onSeek: (t) => this.seekTo(t), onLoop: (a, b) => this.setLoop(a, b, true) });
     this.buildTransport();
-    this.feedback.append(h('p', { class: 'muted' }, 'Loop a line, turn on the mic, and sing. Feedback appears after each pass.'));
+    this.renderFeedback(null);
     window.addEventListener('keydown', (e) => this.key(e));
   }
 
   buildTransport() {
     const t = this.transport; t.innerHTML = '';
-    const seg = (items, cur, onpick, title) => {
-      const el = h('div', { class: 'seg', title });
-      for (const [v, label] of items) el.append(h('button', { class: v === cur ? 'on' : '', onclick: () => { [...el.children].forEach((b) => b.classList.toggle('on', b.dataset.v == String(v))); onpick(v); }, 'data-v': String(v) }, label));
-      return el;
-    };
     this.playBtn = h('button', { class: 'btn primary round big', title: 'Play / pause (Space)', 'aria-label': 'Play', onclick: () => this.toggle() }, icon('play', 22));
     this.timeEl = h('span', { class: 'mono time' }, '0:00');
-    this.loopBtn = h('button', { class: 'btn small', title: 'Loop the selected line or A–B section (L)', onclick: () => { this.loopOn = !this.loopOn; this.syncLoopUI(); } }, icon('loop', 15), 'Loop');
-    this.aBtn = h('button', { class: 'btn small', title: 'Set loop start at the current position ([)', onclick: () => this.markAB('a') }, 'A start');
-    this.bBtn = h('button', { class: 'btn small', title: 'Set loop end at the current position (])', onclick: () => this.markAB('b') }, 'B end');
-    this.clearBtn = h('button', { class: 'btn small ghost', title: 'Remove the loop', onclick: () => this.clearLoop() }, 'Clear');
-    const speedSeg = seg([[0.5, '0.5×'], [0.6, '0.6×'], [0.75, '0.75×'], [0.85, '0.85×'], [1, '1×']], 1, (v) => { this.speed = v; this.player && this.player.setRate(v); }, 'Playback speed (pitch stays the same)');
-    this.micBtn = h('button', { class: 'btn small', title: 'Microphone (M)', onclick: () => this.toggleMic() }, icon('mic', 15), 'Mic');
-    const modeSeg = seg([['along', 'Sing along'], ['muted', 'Solo'], ['blind', 'Blind']], this.mode, (v) => this.setMode(v), 'Sing along with the song, sing with it muted, or hide your live line');
-    this.soundSeg = seg([['mix', 'Original'], ['vocals', 'Voice only'], ['karaoke', 'Backing']], 'mix', (v) => this.setSound(v), 'Hear the full song, the separated voice, or the backing track (karaoke)');
-    this.guideChk = h('input', { type: 'checkbox', 'aria-label': 'Guide tone', onchange: (e) => { this.guideOn = e.target.checked; if (!this.guideOn) this.follower.set(0); } });
-    this.octSel = h('select', { title: 'Which octave you sing in, relative to the original singer', onchange: (e) => { this.song.octave = +e.target.value; upsertSong(this.song); this.refreshKey(); } },
-      h('option', { value: -1 }, 'Octave −1'), h('option', { value: 0, selected: true }, 'Same octave'), h('option', { value: 1 }, 'Octave +1'));
-    this.trSel = h('select', { title: 'Transpose (audio files and practice copies)', onchange: (e) => this.setTranspose(+e.target.value) },
-      ...Array.from({ length: 13 }, (_, i) => i - 6).map((v) => h('option', { value: v, selected: v === 0 }, v === 0 ? 'Original key' : (v > 0 ? '+' : '') + v + ' semitones')));
+    this.loopBtn = h('button', { class: 'btn small', title: 'Loop (L)', onclick: () => this.toggleLoop() }, icon('loop', 15), 'Loop');
+    this.aBtn = h('button', { class: 'btn small ab', title: 'Loop start here ([)', 'aria-label': 'Loop start here', onclick: () => this.markAB('a') }, 'A');
+    this.bBtn = h('button', { class: 'btn small ab', title: 'Loop end here (])', 'aria-label': 'Loop end here', onclick: () => this.markAB('b') }, 'B');
+    this.speedBtn = h('button', { class: 'btn small', title: 'Speed (the pitch stays the same)', 'aria-haspopup': 'menu', onclick: (e) => this.openSpeed(e.currentTarget) });
+    this.soundBtn = h('button', { class: 'btn small', title: 'What you hear', 'aria-haspopup': 'menu', onclick: (e) => this.openSound(e.currentTarget) });
+    this.micBtn = h('button', { class: 'btn round mic-btn', 'aria-label': 'Microphone', onclick: () => this.toggleMic() });
+    this.modeBtn = h('button', { class: 'btn small', title: 'How you sing with the song', 'aria-haspopup': 'menu', onclick: (e) => this.openMode(e.currentTarget) });
     t.append(
-      h('div', { class: 'tgroup main' }, h('button', { class: 'btn round', title: 'Previous line (↑)', 'aria-label': 'Previous line', onclick: () => this.stepPhrase(-1) }, icon('prev', 18)), this.playBtn, h('button', { class: 'btn round', title: 'Next line (↓)', 'aria-label': 'Next line', onclick: () => this.stepPhrase(1) }, icon('next', 18)), this.timeEl),
-      h('div', { class: 'tgroup' }, this.loopBtn, this.aBtn, this.bBtn, this.clearBtn),
-      h('div', { class: 'tgroup' }, speedSeg),
-      h('div', { class: 'tgroup' }, this.micBtn, modeSeg),
-      h('div', { class: 'tgroup' }, this.soundSeg, h('label', { class: 'ctl', title: 'Play the melody as a clear tone (G)' }, this.guideChk, 'Guide tone')),
-      h('div', { class: 'tgroup' }, this.octSel, this.trSel),
-    );
+      h('div', { class: 'tgroup main' },
+        h('button', { class: 'btn round', title: 'Previous line (↑)', 'aria-label': 'Previous line', onclick: () => this.stepPhrase(-1) }, icon('prev', 18)),
+        this.playBtn,
+        h('button', { class: 'btn round', title: 'Next line (↓)', 'aria-label': 'Next line', onclick: () => this.stepPhrase(1) }, icon('next', 18)),
+        this.timeEl),
+      h('div', { class: 'tgroup' }, this.loopBtn, this.aBtn, this.bBtn),
+      h('div', { class: 'tgroup' }, this.speedBtn, this.soundBtn),
+      h('div', { class: 'tgroup' }, this.micBtn, this.modeBtn));
+    this.syncTransport();
   }
+  syncTransport() {
+    this.speedBtn.replaceChildren(icon('slow', 15), fmtSpeed(this.speed));
+    const snd = SOUNDS.find((x) => x[0] === (this.sound || 'mix')) || SOUNDS[0];
+    this.soundBtn.replaceChildren(icon('volume', 15), snd[1] + (this.guideOn ? ' + guide' : ''));
+    this.modeBtn.replaceChildren((MODES.find((x) => x[0] === this.mode) || MODES[0])[1], icon('down', 14));
+    this.syncMicBtn();
+  }
+  openSpeed(anchor) {
+    menu(anchor, [{ head: 'Speed · the pitch stays the same' }, ...SPEEDS.map((v) => ({ label: fmtSpeed(v), checked: this.speed === v, onclick: () => this.setSpeed(v) }))]);
+  }
+  setSpeed(v) { this.speed = v; this.player && this.player.setRate(v); this.syncTransport(); }
+  canStems() { return !!(this.player && this.player.kind === 'audio' && this.player.vocals); }
+  openSound(anchor) {
+    const ok = this.canStems();
+    const why = !(this.player && this.player.kind === 'audio') ? (this.song && this.song.hasCopy ? 'Switch to the recorded copy first' : 'Needs a recorded copy or an audio file') : 'Analyse the song first';
+    const sw = h('input', { type: 'checkbox', checked: this.guideOn, 'aria-label': 'Guide tone', onchange: (e) => this.setGuide(e.target.checked) });
+    menu(anchor, [
+      ...SOUNDS.map(([v, label]) => ({ label, checked: (this.sound || 'mix') === v, disabled: v !== 'mix' && !ok, sub: v === 'mix' ? null : !ok ? why : v === 'vocals' ? 'The singer on their own' : 'Everything except the singer', onclick: () => this.setSound(v) })),
+      'sep',
+      { el: h('label', { class: 'menu-switch' }, h('span', { class: 'mi-text' }, h('span', {}, 'Guide tone'), h('small', {}, 'The melody as a clear tone (G)')), sw) },
+    ]);
+  }
+  setGuide(on) { this.guideOn = !!on; if (!this.guideOn) this.follower.set(0); this.syncTransport(); }
   async setSound(mode) {
-    if (!(this.player && this.player.kind === 'audio')) { toast(this.song && this.song.hasCopy ? 'Switch the source to "Recorded copy" (above) to hear the voice or the backing track on their own.' : 'Voice only and Backing need the song\'s audio: import an audio file, or capture the YouTube song once (that saves a recorded copy).', 'info', 7000); this.syncSoundSeg(); return; }
-    if (!this.player.vocals) { toast('Analyse the song first. That step separates the voice from the music.', 'info'); this.syncSoundSeg(); return; }
-    this.setStatus(mode === 'mix' ? '' : 'Preparing ' + (mode === 'vocals' ? 'the voice track' : 'the backing track') + '…');
+    if (mode !== 'mix' && !this.canStems()) {
+      toast(this.player && this.player.kind === 'audio' ? 'Analyse the song first. That step separates the voice from the music.' : this.song && this.song.hasCopy ? 'Switch the source to the recorded copy to hear the voice or the backing on their own.' : 'Voice only and backing need the song\'s audio: import a file, or capture the YouTube song once.', 'info', 6000);
+      return;
+    }
+    if (!this.player || this.player.kind !== 'audio') { this.sound = 'mix'; this.syncTransport(); return; }
+    this.setStatus(mode === 'mix' ? '' : mode === 'vocals' ? 'Preparing the voice…' : 'Preparing the backing track…');
     await this.player.setSound(mode);
-    this.sound = mode; this.setStatus('');
+    this.sound = mode; this.setStatus(''); this.syncTransport();
   }
-  syncSoundSeg() { if (this.soundSeg) [...this.soundSeg.children].forEach((b) => b.classList.toggle('on', b.dataset.v === (this.sound || 'mix'))); }
+  openMode(anchor) { menu(anchor, MODES.map(([v, label, sub]) => ({ label, sub, checked: this.mode === v, onclick: () => this.setMode(v) }))); }
+  setMode(m, quiet = false) {
+    this.mode = m;
+    this.player && this.player.mute(m === 'muted');
+    if (m === 'muted' && !this.guideOn && !quiet) toast('Tip: turn on the guide tone (Sound menu, or G) to hear the melody while the song is muted.', 'info', 5000);
+    this.syncTransport();
+  }
+
+  // ---- header: title, chips, menus ----------------------------------------------
+  refreshTitle() {
+    const s = this.song;
+    this.titleText.textContent = s ? s.title || 'Untitled' : 'Songs';
+    const sub = s ? s.note || '' : '';
+    this.subEl.textContent = sub; this.subEl.hidden = !sub;
+  }
+  openLibrary(anchor) {
+    const items = songs.map((s) => ({ label: s.title || s.id, sub: s.kind === 'youtube' ? (s.hasCopy ? 'YouTube · recorded copy' : 'YouTube') : 'Audio file', checked: !!(this.song && s.id === this.song.id), onclick: () => { if (!this.song || s.id !== this.song.id) this.open(s.id); } }));
+    menu(anchor, [{ head: 'Your songs' }, ...items, 'sep', { label: 'Add a song', icon: 'plus', onclick: () => this.toggleAdd(true) }], { className: 'library' });
+  }
+  toggleAdd(open) {
+    const on = open ?? !this.addBox.classList.contains('open');
+    this.addBox.classList.toggle('open', on);
+    if (on) setTimeout(() => this.ytInput.focus(), 60);
+  }
+  openMore(anchor) {
+    const s = this.song;
+    if (!s) return menu(anchor, [{ label: 'Add a song', icon: 'plus', onclick: () => this.toggleAdd(true) }], { align: 'end' });
+    const yt = this.source === 'youtube', q = effectiveQuality();
+    menu(anchor, [
+      { label: this.mel ? (yt ? 'Build the melody guide again' : 'Analyse again') : (yt ? 'Build the melody guide' : 'Analyse the song'), icon: 'sparkle', disabled: this.busy, onclick: () => (yt ? this.captureTab() : this.analyzeAudio()) },
+      { head: HAS_GPU ? 'Analysis quality' : 'Analysis quality · no graphics acceleration here' },
+      ...QUALITY.map(([v, label, tip]) => ({ label, sub: qualitySub(v, tip), checked: q === v, disabled: v === 'best' && !HAS_GPU, onclick: () => pickQuality(v) })),
+      'sep',
+      { label: 'Fix the melody guide', icon: 'edit', disabled: !this.mel, onclick: () => this.openFix() },
+      { label: 'Keyboard shortcuts', icon: 'keyboard', onclick: () => this.openKeys() },
+      { label: 'Check this device', icon: 'device', onclick: () => { location.hash = '#settings/device'; } },
+      'sep',
+      { label: 'Remove from library', icon: 'trash', danger: true, onclick: () => this.remove() },
+    ], { align: 'end' });
+  }
+  // Small header chips that open a popover with the detail.
+  chipEl(key, label, value, { tone = '', title = '', onclick } = {}) {
+    this._chips = this._chips || new Map();
+    let el = this._chips.get(key);
+    if (!el) {
+      el = h('button', { class: 'chip-btn', 'aria-haspopup': 'dialog', onclick: (e) => el._on && el._on(e) }, h('span', { class: 'cl' }), h('span', { class: 'cv' }));
+      this._chips.set(key, el);
+    }
+    el._on = onclick; el.className = 'chip-btn' + (tone ? ' ' + tone : ''); el.title = title;
+    el.firstChild.textContent = label || ''; el.firstChild.hidden = !label; el.lastChild.textContent = value;
+    return el;
+  }
+  renderInfo() {
+    const s = this.song;
+    this.refreshTitle();
+    const out = [];
+    if (s && this.mel) {
+      const m = hzToMidi(this.songSa), pm = hzToMidi(this.practiceSa);
+      const moved = Math.round(pm) !== Math.round(m);
+      out.push(this.chipEl('key', isIndian(settings) ? 'Sa' : 'Key', westernName(m) + (moved ? ' → ' + westernName(pm) : ''), { title: 'Key note and transposition', onclick: (e) => this.openKey(e.currentTarget) }));
+      const rf = this.rangeFit();
+      out.push(this.chipEl('range', 'Range', rf.span, { tone: rf.tone, title: rf.title, onclick: (e) => this.openRange(e.currentTarget) }));
+    }
+    if (s && s.kind === 'youtube' && s.hasCopy) out.push(this.chipEl('src', 'Source', this.source === 'youtube' ? 'Video' : 'Recorded copy', { title: 'Play the video or the recorded copy', onclick: (e) => this.openSource(e.currentTarget) }));
+    if (s && this.mel && !s[this.source + 'Separated']) out.push(this.chipEl('rough', '', 'Rough guide', { tone: 'warn', title: 'Traced from the full mix', onclick: (e) => this.openRough(e.currentTarget) }));
+    this.chipsEl.replaceChildren(...out);
+    this.renderEmpty();
+  }
+  rangeFit() {
+    const span = `${westernName(hzToMidi(this.melP5))}–${westernName(hzToMidi(this.melP95))}`;
+    if (settings.rangeLowMidi == null) return { span, tone: '', title: 'Melody range. Do the range test for a key suggestion.' };
+    const shift = (this.source === 'audio' ? this.song.transpose || 0 : 0) + 12 * (this.song.octave || 0);
+    const lo = hzToMidi(this.melP5) + shift, hi = hzToMidi(this.melP95) + shift;
+    const over = Math.max(0, Math.round(hi - (settings.rangeHighMidi - 1))), under = Math.max(0, Math.round((settings.rangeLowMidi + 1) - lo));
+    return { span, over, under, tone: over || under ? 'warn' : 'good', title: over || under ? 'Partly outside your comfortable range' : 'Fits your range' };
+  }
+  popHead(label, big, sub) { return h('div', { class: 'pop-head' }, h('div', { class: 'kp-label' }, label), h('div', { class: 'kp-big' }, big, sub ? h('small', {}, sub) : null)); }
+  openKey(anchor) {
+    const s = this.song;
+    const box = h('div', { class: 'keypop' });
+    const draw = () => {
+      const m = hzToMidi(this.songSa), cents = Math.round((m - Math.round(m)) * 100);
+      const cands = (s[this.source + 'SaCands'] || []).slice(1, 4);
+      const stepper = (label, value, dec, inc, disabled) => h('div', { class: 'stepper' }, h('span', { class: 'sp-l' }, label),
+        h('div', { class: 'sp-c' }, h('button', { class: 'btn small round', 'aria-label': label + ' down', disabled, onclick: dec }, '−'), h('span', { class: 'sp-v' }, value), h('button', { class: 'btn small round', 'aria-label': label + ' up', disabled, onclick: inc }, '+')));
+      const tr = s.transpose || 0, oc = s.octave || 0;
+      box.replaceChildren(...[
+        this.popHead(isIndian(settings) ? 'Song Sa' : 'Song key note', westernName(m), cents ? ` ${signed(cents)}¢` : ''),
+        h('div', { class: 'row wrap kp-nudge' },
+          h('button', { class: 'btn small', onclick: () => { this.nudgeSa(-100); draw(); } }, '−1 st'),
+          h('button', { class: 'btn small', onclick: () => { this.nudgeSa(100); draw(); } }, '+1 st'),
+          h('button', { class: 'btn small', onclick: () => { this.nudgeSa(-10); draw(); } }, '−10¢'),
+          h('button', { class: 'btn small', onclick: () => { this.nudgeSa(10); draw(); } }, '+10¢')),
+        cands.length ? h('div', { class: 'kp-alt' }, 'Or ', ...cands.map((hz, i) => [i ? ' · ' : '', h('button', { class: 'linkish', onclick: () => { this.setSa(hz); draw(); } }, westernName(hzToMidi(hz)))])) : null,
+        h('p', { class: 'kp-hint' }, 'Phrases usually come to rest on the key note: the bold line.'),
+        h('div', { class: 'kp-sep' }),
+        h('div', { class: 'kp-label' }, 'You sing it'),
+        stepper('Transpose', (tr > 0 ? '+' : '') + tr + ' st', () => this.setTranspose(tr - 1).then(draw), () => this.setTranspose(tr + 1).then(draw), this.source !== 'audio'),
+        this.source !== 'audio' ? h('p', { class: 'kp-hint' }, s.hasCopy ? 'Transposing works on the recorded copy (Source chip).' : 'To transpose, build the guide once. That saves a recorded copy.') : null,
+        stepper('Octave', ['Lower', 'Same', 'Higher'][oc + 1], () => { this.setOctave(oc - 1); draw(); }, () => { this.setOctave(oc + 1); draw(); })].filter(Boolean));
+    };
+    draw();
+    popover(anchor, box, { className: 'wide' });
+  }
+  openRange(anchor) {
+    const rf = this.rangeFit();
+    const box = h('div', { class: 'keypop' }, this.popHead('Melody range', rf.span));
+    if (settings.rangeLowMidi == null) {
+      box.append(h('p', { class: 'kp-hint' }, 'Find your comfortable range (2 minutes) to see whether this song suits your voice.'), h('a', { class: 'btn small', href: '#practice/range' }, 'Find my range'));
+    } else {
+      const yours = `${westernName(settings.rangeLowMidi)}–${westernName(settings.rangeHighMidi)}`;
+      box.append(h('p', { class: 'kp-line' }, h('span', { class: 'muted' }, 'Your range '), yours));
+      box.append(h('p', { class: 'kp-line ' + (rf.tone || '') }, rf.over ? `Goes ${rf.over} semitone${rf.over > 1 ? 's' : ''} above your comfortable top.` : rf.under ? `Goes ${rf.under} semitone${rf.under > 1 ? 's' : ''} below your comfortable bottom.` : 'Fits your range.'));
+      const fit = fitToRange(this.melP5, this.melP95, settings.rangeLowMidi, settings.rangeHighMidi);
+      const cur = { st: this.source === 'audio' ? this.song.transpose || 0 : 0, oct: this.song.octave || 0 };
+      if (fit && (fit.best.st !== cur.st || fit.best.oct !== cur.oct) && (rf.over || rf.under)) {
+        const b = fit.best, what = [b.oct ? `octave ${b.oct > 0 ? 'up' : 'down'}` : '', b.st ? `${b.st > 0 ? '+' : ''}${b.st} semitones` : ''].filter(Boolean).join(', ') || 'the original key';
+        box.append(h('div', { class: 'row spread kp-fit' }, h('span', {}, 'Best for you: ', h('strong', {}, what)), h('button', { class: 'btn small primary', onclick: () => { closePopover(); this.applyFit(b); } }, 'Apply')));
+      }
+    }
+    popover(anchor, box, { className: 'wide' });
+  }
+  openSource(anchor) {
+    menu(anchor, [
+      { label: 'YouTube video', sub: 'The original, in step with the video', checked: this.source === 'youtube', onclick: () => this.switchSource('youtube') },
+      { label: 'Recorded copy', sub: 'Transpose it, and hear the voice or the backing alone', checked: this.source === 'audio', onclick: () => this.switchSource('audio') },
+    ]);
+  }
+  openRough(anchor) {
+    const yt = this.source === 'youtube';
+    menu(anchor, [
+      { head: 'Traced from the full mix, so instruments can pull the line off the voice.' },
+      { label: yt ? 'Build it again with voice separation' : 'Analyse again with voice separation', icon: 'sparkle', disabled: this.busy, onclick: () => (yt ? this.captureTab() : this.analyzeAudio()) },
+    ]);
+  }
+  qualityPill() {
+    const cur = () => (QUALITY.find((x) => x[0] === effectiveQuality()) || QUALITY[1]);
+    const btn = h('button', { class: 'btn small soft', 'aria-haspopup': 'menu', title: 'Voice separation quality', onclick: (e) => menu(e.currentTarget, [{ head: HAS_GPU ? 'Voice separation' : 'Voice separation · no graphics acceleration in this browser' }, ...QUALITY.map(([v, label, tip]) => ({ label, sub: qualitySub(v, tip), checked: cur()[0] === v, disabled: v === 'best' && !HAS_GPU, onclick: () => { pickQuality(v); btn.replaceChildren(cur()[1], icon('down', 14)); } }))], { align: 'center' }) }, cur()[1], icon('down', 14));
+    gpuChecked.then(() => { if (btn.isConnected) btn.replaceChildren(cur()[1], icon('down', 14)); });
+    return btn;
+  }
+  // The empty lane before a melody guide exists: one clear action.
+  renderEmpty() {
+    if (this.busy) return;
+    if (!this.song || this.mel) { this.hideOverlay(); return; }
+    const yt = this.source === 'youtube';
+    this.showOverlay('center', h('div', { class: 'empty' },
+      h('div', { class: 'empty-ic' }, icon('wave', 26)),
+      h('h3', {}, 'Build the melody guide'),
+      h('p', {}, yt ? 'The song plays once while the voice is traced. When Chrome asks, pick this tab and keep “Also share tab audio” on.' : 'The voice is separated from the music and traced. It runs on this device.'),
+      h('div', { class: 'row center wrap' },
+        h('button', { class: 'btn primary', onclick: () => (yt ? this.captureTab() : this.analyzeAudio()) }, icon(yt ? 'headphones' : 'sparkle', 16), yt ? 'Start' : 'Analyse'),
+        this.qualityPill())));
+  }
+  showOverlay(kind, ...kids) { const o = this.overlay; o.hidden = false; o.className = 'lane-overlay ' + kind; o.replaceChildren(...kids); }
+  hideOverlay() { this.overlay.hidden = true; this.overlay.replaceChildren(); }
+  openFix() {
+    const syncOut = h('span', { class: 'mono' }, (this.song.sync || 0) + ' ms');
+    const sync = h('input', { type: 'range', min: -400, max: 400, step: 10, value: this.song.sync || 0, oninput: (e) => { this.song.sync = +e.target.value; syncOut.textContent = this.song.sync + ' ms'; }, onchange: () => upsertSong(this.song) });
+    const btn = (label, op) => h('button', { class: 'btn small', onclick: () => this.editRegion(op) }, label);
+    sheet('Fix the melody guide', h('div', { class: 'fix' },
+      h('p', { class: 'muted' }, 'Instruments can pull the guide off the voice. Loop the bad stretch first (drag on the strip above the lane), then:'),
+      h('div', { class: 'row wrap' }, btn('Octave up', 'up'), btn('Octave down', 'down'), btn('Erase (not the singer)', 'erase'), h('button', { class: 'btn small ghost', onclick: () => this.undoEdit() }, 'Undo')),
+      h('div', { class: 'kp-sep' }),
+      h('label', { class: 'ctl' }, 'Guide timing ', sync, ' ', syncOut),
+      h('p', { class: 'small muted' }, 'If the guide is always a little ahead of or behind the singer, slide this until they line up.')));
+  }
+  openKeys() {
+    const rows = [['Space', 'Play or pause'], ['↑ ↓', 'Previous or next line'], ['← →', 'Back or forward 2 s'], ['[ ]', 'Loop start or end'], ['L', 'Loop on or off'], ['M', 'Microphone'], ['G', 'Guide tone']];
+    sheet('Keyboard shortcuts', h('dl', { class: 'keys' }, ...rows.flatMap(([k, v]) => [h('dt', {}, ...k.split(' ').map((x) => h('kbd', {}, x))), h('dd', {}, v)])));
+  }
 
   // ---- library ---------------------------------------------------------------
-  refreshSelect() {
-    this.sel.innerHTML = '';
-    for (const s of songs) this.sel.append(h('option', { value: s.id, selected: this.song && s.id === this.song.id }, s.title || s.id));
-  }
+  refreshSelect() { this.refreshTitle(); }
   async activate() {
     this.active = true;
-    this.refreshSelect();
-    if (!this.song) await this.open(lastSong.get() && getSong(lastSong.get()) ? lastSong.get() : songs[0] && songs[0].id);
+    if (!this.song && !this.opening) this.opening = this.open(lastSong.get() && getSong(lastSong.get()) ? lastSong.get() : songs[0] && songs[0].id);
+    else this.refreshTitle();
     this.loopRAF();
+    return this.opening;
   }
   deactivate() {
     this.active = false;
     cancelAnimationFrame(this.raf);
     if (this.player && this.player.playing) this.player.pause();
     this.follower.set(0);
+    closePopover();
+  }
+  // Sub-routes: #songs/learn/<line> or #songs/learn/<a>-<b> open the line coach.
+  async route(sub, arg) {
+    await this.opening;
+    if (sub === 'learn' && arg != null) {
+      let range = null;
+      if (/^\d+$/.test(arg)) { const p = this.phrases[+arg]; if (p) range = { a: p.start, b: p.end, phrase: +arg }; }
+      else { const m = String(arg).match(/^(\d+(?:\.\d+)?)-(\d+(?:\.\d+)?)$/); if (m && +m[2] > +m[1] + 0.3) range = { a: +m[1], b: +m[2], phrase: null }; }
+      if (!range || !this.mel) { location.replace('#songs'); return; }
+      if (!this.coach.open) {
+        try { const { RiffCoach } = await import('./riff.js'); if (!this.coach.open) this.coach = new RiffCoach(this); }
+        catch (e) { console.error(e); toast('The line coach couldn\'t load.', 'bad'); location.replace('#songs'); return; }
+      }
+      if (this.coach.active) this.coach.close();
+      this.coach.open(range);
+    } else if (this.coach.active) this.coach.close();
+  }
+  learnRange(a, b, phrase) { location.hash = '#songs/learn/' + (phrase != null ? phrase : `${a.toFixed(2)}-${b.toFixed(2)}`); }
+  learnLoop() {
+    if (this.curPhrase != null && this.loopOn) return this.learnRange(0, 0, this.curPhrase);
+    if (this.loop) this.learnRange(this.loop.a, this.loop.b, null);
+  }
+  onLyrics() {
+    this.refreshTitle();
+    this.renderPhrases();
+    if (this.coach.active && this.coach.onLyrics) this.coach.onLyrics();
   }
 
   resetTake() {
     this.finishTake(true);
     this.curPhrase = null; this.lastTakeFrames = null; this.lastTake = null;
-    this.feedback.innerHTML = '';
-    this.feedback.append(h('p', { class: 'muted' }, 'Loop a line, turn on the mic, and sing. Feedback appears after each pass.'));
+    this.renderFeedback(null);
   }
   guardBusy() {
     if (!this.busy) return false;
-    toast('Wait for the current melody capture/analysis to finish first.', 'info');
-    this.refreshSelect();
+    toast('Wait for the current capture or analysis to finish first.', 'info');
     return true;
   }
   async open(id) {
     if (this.guardBusy()) return;
+    if (this.coach.active) { this.coach.close(); if (/^#songs\/learn/.test(location.hash)) history.replaceState(null, '', '#songs'); }
+    closePopover();
     this.resetTake();
     if (this.player) { this.player.destroy(); this.player = null; }
+    this.lyrics.load(null);
     if (!id || !getSong(id)) {
       this.song = null; this.mel = null; this.phrases = [];
-      this.playerBox.innerHTML = '<p class="muted">Add a song to begin: "+ Add song" above.</p>';
-      this.info.innerHTML = ''; this.overview.mel = null; this.overview.phrases = []; this.overview.duration = 0;
-      this.lane.refAt = null; this.lane.labels = []; this.lane.message = 'No song loaded';
-      this.renderPhrases();
+      this.playerBox.replaceChildren(h('div', { class: 'player-empty' }, h('p', {}, 'Add a song to begin.'), h('button', { class: 'btn primary small', onclick: () => this.toggleAdd(true) }, icon('plus', 15), 'Add song')));
+      this.overview.mel = null; this.overview.phrases = []; this.overview.duration = 0;
+      this.lane.refAt = null; this.lane.labels = []; this.lane.message = 'No song yet';
+      this.renderInfo(); this.renderPhrases();
       return;
     }
     const s = getSong(id);
@@ -415,15 +667,15 @@ export class SongStudio {
     this.song = s; lastSong.set(id);
     s.octave = s.octave || 0; s.transpose = s.transpose || 0; s.best = s.best || {}; s.sync = s.sync || 0;
     this.source = s.kind === 'audio' ? 'audio' : (s.useCopy && s.hasCopy ? 'audio' : 'youtube');
-    this.refreshSelect();
+    this.refreshTitle();
     this.loop = null; this.pendingA = null; this.loopOn = false; this.syncLoopUI();
-    this.octSel.value = String(s.octave);
-    this.trSel.value = '0';
+    this.sound = 'mix'; this.syncTransport();
     await this.mountPlayer();
     if (token !== this.openToken) return; // a newer open() took over
     await this.loadMelody();
     if (token !== this.openToken) return;
     this.renderInfo();
+    this.lyrics.load(s);
   }
 
   async mountPlayer() {
@@ -435,10 +687,15 @@ export class SongStudio {
       this.player = new YTPlayer(holder, s.videoId, {
         onState: (st) => this.onState(st),
         onError: (code) => {
-          const why = code === 101 || code === 150 ? 'YouTube stopped this video from playing here. Usually the owner blocks playing it on other sites. If YouTube says "too many devices streaming", close your other YouTube tabs and reload.' : code === 100 ? 'This video was not found or is private.' : 'YouTube error ' + code + '.';
-          this.playerBox.append(h('div', { class: 'warn' }, why + ' Workaround: ', h('a', { href: 'https://www.youtube.com/watch?v=' + s.videoId, target: '_blank', rel: 'noopener' }, 'open it on YouTube ↗'), ', then come back and use "+ Add song → Record from another tab". You\'ll get a copy you can loop, slow down and transpose.'));
+          const why = code === 100 ? 'This video is private or was removed.' : 'YouTube won\'t play this video here.';
+          this.playerBox.append(h('div', { class: 'warn' }, why, ' ', h('a', { href: 'https://www.youtube.com/watch?v=' + s.videoId, target: '_blank', rel: 'noopener' }, 'Open it on YouTube'), ', then use Add song → Record from another tab.', code === 101 || code === 150 ? h('span', { class: 'warn-more' }, ' "Too many devices"? Close other YouTube tabs and reload.') : null));
         },
-        onReady: (p) => { if (!s.titleFetched) { const t = p.title(); if (t) { s.title = t; s.titleFetched = true; upsertSong(s); this.refreshSelect(); } } },
+        onReady: (p) => {
+          if (!s.titleFetched) {
+            const t = p.title();
+            if (t) { s.title = t; s.titleFetched = true; upsertSong(s); if (this.song === s) { this.refreshTitle(); if (this.lyrics.state === 'none' && !s.lyricsTried) this.lyrics.load(s); } }
+          }
+        },
       });
       await Promise.race([this.player.ready, new Promise((r) => setTimeout(r, 8000))]);
     } else {
@@ -446,12 +703,11 @@ export class SongStudio {
       if (!blob) { this.playerBox.append(h('div', { class: 'warn' }, 'The audio for this song is missing from this browser. Add it again.')); return; }
       this.player = new AudioPlayer(blob, { onState: (st) => this.onState(st) });
       await this.player.ready;
-      const cover = h('div', { class: 'audio-cover' }, h('div', { class: 'big' }, icon('songs', 44)), h('div', {}, s.title));
-      this.playerBox.append(cover);
+      this.playerBox.append(h('div', { class: 'audio-cover' }, h('div', { class: 'ac-ic' }, icon('songs', 22)), h('div', { class: 'ac-text' }, h('strong', {}, s.title), h('small', {}, s.kind === 'youtube' ? 'Recorded copy of the video' : 'Audio file · ' + fmtTime(this.player.duration())))));
       const stem = await idbGet('audio', s.id + ':vocals');
       if (stem && this.player) this.player.setVocals(fromI16(stem));
-      this.sound = 'mix'; this.syncSoundSeg();
-      if (s.transpose) { this.trSel.value = String(s.transpose); await this.player.setTranspose(s.transpose); }
+      this.sound = 'mix'; this.syncTransport();
+      if (s.transpose) await this.player.setTranspose(s.transpose);
     }
     this.player.setRate(this.speed);
     if (this.mode === 'muted') this.player.mute(true);
@@ -474,6 +730,7 @@ export class SongStudio {
     this.overview.mel = mel; this.overview.phrases = this.phrases;
     this.refreshKey();
     this.renderPhrases();
+    if (this.lyrics && this.lyrics.song === s) this.lyrics.realign();
   }
   get songSa() { return (this.song && this.song[this.source + 'Sa']) || saHzFrom(settings); }
   get practiceSa() {
@@ -489,7 +746,7 @@ export class SongStudio {
     this.lane.saHz = this.practiceSa; this.lane.tuning = settings.tuning; this.lane.notation = settings.notation;
     this.lane.tol = settings.tol; this.lane.octaveFree = settings.octaveFree;
     this.lane.refAt = this.mel ? this.refAt : null;
-    this.lane.message = this.mel ? '' : 'No melody guide yet. Use "Build melody guide" above.';
+    this.lane.message = '';
     this.labelTokens = [];
     if (this.mel) for (const p of this.phrases) {
       const toks = transcribe(this.refAt, p.start, p.end, { tuning: settings.tuning, notation: settings.notation, saHz: this.practiceSa });
@@ -503,73 +760,19 @@ export class SongStudio {
     if (tanpura.on) tanpura.start(this.practiceSa, settings.tanpuraFirst);
     this.renderInfo();
   }
-
-  // ---- info panel ------------------------------------------------------------
-  renderInfo() {
-    const s = this.song, i = this.info; if (!s || this.capturing) return;
-    i.innerHTML = '';
-    i.append(h('h2', {}, s.title || 'Untitled'));
-    if (s.note) i.append(h('p', { class: 'muted small' }, s.note));
-    if (s.kind === 'youtube' && s.hasCopy) {
-      const sw = h('div', { class: 'seg' },
-        h('button', { class: 'btn small' + (this.source === 'youtube' ? ' on' : ''), onclick: () => this.switchSource('youtube') }, 'YouTube video'),
-        h('button', { class: 'btn small' + (this.source === 'audio' ? ' on' : ''), onclick: () => this.switchSource('audio') }, 'Recorded copy'));
-      i.append(h('div', { class: 'row' }, h('span', { class: 'muted small' }, 'Source: '), sw));
-    }
-    // melody status
-    if (!this.mel) {
-      i.append(h('div', { class: 'callout' },
-        h('strong', {}, 'First, build the melody guide'),
-        h('p', {}, this.source === 'youtube'
-          ? 'Swara Lab listens to the song once while it plays, separates the voice from the instruments, and traces the melody. Click below, choose "This tab", and switch on "Also share tab audio". Keep this tab open while the song plays.'
-          : 'Swara Lab separates the voice from the instruments with an AI model, then traces the melody. It runs privately on this computer.'),
-        h('div', { class: 'row wrap', style: 'margin-top:10px;gap:10px 14px' },
-          this.source === 'youtube'
-            ? h('button', { class: 'btn primary', onclick: () => this.captureTab() }, icon('headphones', 16), 'Build melody guide')
-            : h('button', { class: 'btn primary', onclick: () => this.analyzeAudio() }, icon('sparkle', 16), 'Analyse the song'),
-          qualitySeg((v) => { const p = this.info.querySelector('.q-hint'); if (p) p.textContent = qualityHint(v); })),
-        h('p', { class: 'small muted q-hint', style: 'margin-top:8px' }, qualityHint(settings.sepQuality)),
-      ));
-    } else {
-      const sa = this.songSa, m = hzToMidi(sa);
-      const cands = (s[this.source + 'SaCands'] || []).slice(1);
-      i.append(h('div', { class: 'keyrow' },
-        h('div', {}, h('div', { class: 'muted small' }, isIndian(settings) ? 'Song Sa (tonic)' : 'Song key note (tonic)'), h('div', { class: 'keyname' }, westernName(m), h('small', {}, ` ${(m - Math.round(m)) * 100 > 0 ? '+' : ''}${Math.round((m - Math.round(m)) * 100)}¢`)), isIndian(settings) ? h('div', { class: 'muted small' }, `${kattaiName(Math.round(m) % 12)} · ${kaliSafedName(Math.round(m) % 12)}`) : null),
-        h('div', { class: 'col' },
-          h('div', { class: 'row' }, h('button', { class: 'btn small', onclick: () => this.nudgeSa(-100) }, '−1 st'), h('button', { class: 'btn small', onclick: () => this.nudgeSa(100) }, '+1 st'), h('button', { class: 'btn small', onclick: () => this.nudgeSa(-10) }, '−10¢'), h('button', { class: 'btn small', onclick: () => this.nudgeSa(10) }, '+10¢')),
-          cands.length ? h('div', { class: 'muted small' }, 'Other guesses: ', ...cands.map((hz) => h('a', { href: '#', onclick: (e) => { e.preventDefault(); this.setSa(hz); } }, westernName(hzToMidi(hz)) + ' '))) : null,
-          h('div', { class: 'muted small' }, isIndian(settings) ? 'Check: the Sa line should sit where phrases come to rest.' : 'Check: the bold key-note line should be where phrases come to rest. Minor-key songs often rest there too.'),
-        ),
-      ));
-      // range fit
-      const fit = fitToRange(this.melP5, this.melP95, settings.rangeLowMidi, settings.rangeHighMidi);
-      const span = `${westernName(hzToMidi(this.melP5))}–${westernName(hzToMidi(this.melP95))}`;
-      if (fit) {
-        const b = fit.best;
-        const msg = b.st === 0 && b.oct === 0 ? `Melody spans ${span}. It fits your range as it is.`
-          : `Melody spans ${span}. ${fit.asIs.over > 0 ? `As is, it goes ${fit.asIs.over} semitone(s) outside your comfortable range. ` : ''}Best fit: ${b.oct ? `octave ${b.oct > 0 ? '+1' : '−1'} ` : ''}${b.st ? `${b.st > 0 ? '+' : ''}${b.st} semitones` : ''}.`;
-        i.append(h('p', { class: 'small' }, msg, ' ', h('a', { href: '#', onclick: (e) => { e.preventDefault(); this.applyFit(b); } }, 'Apply')));
-      } else i.append(h('p', { class: 'small muted' }, `Melody spans ${span}. `, h('a', { href: '#range' }, 'Do the range test'), ' to get a key suggestion.'));
-      const row = h('div', { class: 'row wrap' });
-      if (this.source === 'youtube') row.append(h('button', { class: 'btn small', onclick: () => this.captureTab() }, icon('headphones', 14), 'Capture again'));
-      else row.append(h('button', { class: 'btn small', onclick: () => this.analyzeAudio() }, icon('sparkle', 14), 'Re-analyse'), qualitySeg());
-      if (!s[this.source + 'Separated']) row.append(h('span', { class: 'small muted' }, 'Traced from the full mix. Re-analyse to separate the voice for better accuracy.'));
-      i.append(row);
-    }
-    this.status = h('div', { class: 'status small' });
-    i.append(this.status);
-    this.renderTools();
-  }
   nudgeSa(c) { this.setSa(this.songSa * Math.pow(2, c / 1200)); }
   setSa(hz) { this.song[this.source + 'Sa'] = hz; upsertSong(this.song); this.refreshKey(); this.renderPhrases(); }
+  setOctave(o) { o = Math.max(-1, Math.min(1, o)); this.song.octave = o; upsertSong(this.song); this.refreshKey(); }
   async applyFit(b) {
-    this.song.octave = b.oct; this.octSel.value = String(b.oct);
-    if (b.st && this.source !== 'audio') toast(this.song.hasCopy ? 'Switch the source to "Recorded copy" to transpose by ' + b.st + ' semitones.' : 'To transpose a YouTube song, capture it once (Capture again). That saves a recorded copy you can transpose.', 'info', 6000);
-    else if (b.st) await this.setTranspose(b.st);
+    this.song.octave = b.oct;
+    if (b.st && this.source !== 'audio') toast(this.song.hasCopy ? `Switch the source to the recorded copy to transpose by ${b.st} semitones.` : 'To transpose a YouTube song, build the guide once. That saves a recorded copy you can transpose.', 'info', 6000);
+    else if (b.st || this.source === 'audio') await this.setTranspose(b.st);
     upsertSong(this.song); this.refreshKey();
   }
   async setTranspose(st) {
-    if (this.source !== 'audio') { this.trSel.value = '0'; toast(this.song.hasCopy ? 'Transposing works on the recorded copy. Switch the source above to "Recorded copy".' : 'YouTube audio can\'t be pitch-shifted directly. Capture the song once (Capture again); that saves a recorded copy you can transpose.', 'info', 6000); return; }
+    st = Math.max(-6, Math.min(6, st));
+    if (this.source !== 'audio') return;
+    if (st === (this.song.transpose || 0) && this.player && this.player.st0 === st) return;
     this.setStatus('Transposing…');
     await this.player.setTranspose(st);
     this.song.transpose = st; upsertSong(this.song); this.refreshKey();
@@ -584,19 +787,17 @@ export class SongStudio {
     if (!this.mel && src === 'audio') await this.analyzeAudio();
     this.renderInfo();
   }
-  setStatus(t) { if (this.status) this.status.textContent = t; }
-  // Progress card for long jobs: ring + steps + time left + speed switch.
+  setStatus(t) { this.statusEl.textContent = t; this.statusEl.classList.toggle('on', !!t); }
+  // Progress card for long jobs: ring, steps, time left, a faster option.
   showProgress(step, p, info = {}) {
-    if (!this.status) return;
-    let box = this.status.querySelector('.analysis');
-    const want = (settings.sepQuality || 'balanced') === 'best' && HAS_GPU ? 'roformer' : (settings.sepQuality === 'fast' ? 'spleeter' : 'kim');
+    let box = this.overlay.querySelector('.analysis');
+    const eq = effectiveQuality(), want = eq === 'best' ? 'roformer' : eq === 'fast' ? 'spleeter' : 'kim';
     if (step === 'fallback') {
       if (box) { box.dataset.model = info.model; this.buildSteps(box); }
       toast(info.reason === 'nogpu' ? 'Best quality needs a graphics card (WebGPU) in this browser, so Balanced is being used.' : info.reason === 'user' ? 'Switched to Balanced.' : 'Best quality couldn\'t run here, so Balanced is being used.', 'info', 6000);
       return;
     }
     if (!box) {
-      this.status.textContent = '';
       const C = 2 * Math.PI * 26;
       box = h('div', { class: 'analysis', role: 'status', 'aria-live': 'polite' },
         h('div', { class: 'ring', html: `<svg viewBox="0 0 64 64" aria-hidden="true"><circle class="track" cx="32" cy="32" r="26"/><circle class="fill" cx="32" cy="32" r="26" stroke-dasharray="${C}" stroke-dashoffset="${C}"/></svg><span class="pct">0%</span>` }),
@@ -606,10 +807,10 @@ export class SongStudio {
           h('div', { class: 'a-meta' }),
           h('div', { class: 'a-foot' },
             h('button', { class: 'btn small a-faster', onclick: () => { useFastModel(); box.querySelector('.a-faster').disabled = true; box.querySelector('.a-faster').textContent = 'Switching…'; } }, 'Use a faster model'),
-            h('span', { class: 'a-note' }, 'Runs privately on this computer. Each song is analysed once, then saved.'))));
+            h('span', { class: 'a-note' }, 'Runs on this device. Each song is analysed once, then saved.'))));
       box.dataset.model = want;
       this.buildSteps(box);
-      this.status.append(box);
+      this.showOverlay('center solid', box);
     }
     if (info.model && info.model !== box.dataset.model) { box.dataset.model = info.model; this.buildSteps(box); }
     if (step === 'build') { box.classList.add('indeterminate'); box.querySelector('.a-title').textContent = 'Building the melody'; return; }
@@ -625,11 +826,9 @@ export class SongStudio {
     const meta = [];
     const eta = info.eta;
     if (step === 'separate' && eta != null && p > 0) meta.push(eta > 90 ? `About ${Math.round(eta / 60)} minutes left` : eta > 50 ? 'About a minute left' : eta > 8 ? `About ${Math.round(eta / 5) * 5} seconds left` : 'Almost done');
-    if (info.gpu != null) meta.push(info.gpu ? 'Using your graphics card' : 'Using your processor');
+    if (info.gpu != null) meta.push(info.gpu ? 'Using your graphics card' : box.dataset.model === 'spleeter' ? 'Using your processor' : 'Using your processor, so this can take a while');
     if (meta.length) box.querySelector('.a-meta').textContent = meta.join(' · ');
-    const fb = box.querySelector('.a-faster');
-    fb.hidden = box.dataset.model === 'spleeter' || step === 'trace';
-    this.lane.message = 'Analysing… ' + Math.round(overall * 100) + '%';
+    box.querySelector('.a-faster').hidden = box.dataset.model === 'spleeter' || step === 'trace';
   }
   buildSteps(box) {
     const m = box.dataset.model;
@@ -643,34 +842,38 @@ export class SongStudio {
     const ol = box.querySelector('.a-steps'); ol.innerHTML = '';
     for (const [k, label] of box._steps) ol.append(h('li', { 'data-s': k }, h('span', { class: 'a-dot' }), h('span', { class: 'a-label' }, label), h('span', { class: 'a-sub' }, k === 'load' ? `${name} · ${size}${m === 'roformer' ? '' : ', downloaded once'}` : k === 'download' ? `${size}, once · saved in your browser for next time` : k === 'refine' ? 'Kim Vocal 2, blended in for extra accuracy' : '')));
   }
-  hideProgress() { if (this.status) this.status.textContent = ''; if (this.mel) this.lane.message = ''; }
+  hideProgress() { this.hideOverlay(); if (!this.mel && !this.busy) this.renderEmpty(); }
 
-  // ---- phrases -----------------------------------------------------------------
+  // ---- lines -----------------------------------------------------------------------
   renderPhrases() {
     const b = this.phraseBox; b.innerHTML = '';
-    if (!this.song || !this.phrases || !this.phrases.length) { b.append(h('p', { class: 'muted' }, this.mel ? 'No lines found.' : 'Lines appear once the melody guide is built.')); return; }
-    b.append(h('p', { class: 'muted small' }, 'Each row is one phrase (line) of the song. The letters are the notes the singer sings, approximately. Click a row to loop it, then sing along.'));
+    this.linesTools.innerHTML = '';
+    this.phraseEls = null;
+    if (!this.song || !this.phrases || !this.phrases.length) { b.append(h('p', { class: 'empty-note' }, this.mel ? 'No lines found.' : 'The song\'s lines appear here once the melody guide is built.')); return; }
+    const orn = h('input', { type: 'checkbox', checked: !!settings.showOrnaments, 'aria-label': 'Show ornaments', onchange: (e) => { saveSettings({ showOrnaments: e.target.checked }); this.refreshKey(); this.renderPhrases(); } });
+    this.linesTools.append(h('label', { class: 'ctl small', title: 'Show slides, shakes and grace notes' }, 'Ornaments', orn));
     const list = h('ol', { class: 'phrase-list' });
-    this.phrases.forEach((p, i) => {
+    this.phraseEls = this.phrases.map((p, i) => {
       const best = this.song.best[i];
+      const words = this.lyrics ? this.lyrics.textBetween(p.start, p.end) : '';
       const li = h('li', { class: this.curPhrase === i ? 'cur' : '', onclick: () => this.loopPhrase(i) },
         h('span', { class: 'ptime mono' }, fmtTime(p.start)),
-        h('span', { class: 'psargam' }, p.sargam || ''),
-        h('span', { class: 'pbest ' + (best >= 75 ? 'good' : best >= 50 ? 'ok' : best != null ? 'bad' : '') }, best != null ? String(best) : '–'));
+        h('span', { class: 'ptext' }, words ? h('span', { class: 'pwords' }, words) : null, h('span', { class: 'psargam' }, p.sargam || '')),
+        h('span', { class: 'pbest ' + (best >= 75 ? 'good' : best >= 50 ? 'ok' : best != null ? 'bad' : '') }, best != null ? String(best) : ''),
+        h('button', { class: 'plearn', title: 'Learn this line step by step', 'aria-label': `Learn line ${i + 1}`, onclick: (e) => { e.stopPropagation(); this.learnRange(p.start, p.end, i); } }, icon('target', 16)));
       list.append(li);
+      return li;
     });
-    const orn = h('input', { type: 'checkbox', checked: !!settings.showOrnaments, onchange: (e) => { saveSettings({ showOrnaments: e.target.checked }); this.refreshKey(); this.renderPhrases(); } });
-    b.append(list, h('label', { class: 'ctl small' }, orn, ' Show ornaments'));
-    if (settings.showOrnaments) b.append(h('p', { class: 'muted small' }, isIndian(settings)
-        ? '~ = meend (slide), * = gamak (shake), (x) = kan swar (grace note). '
-        : '~ = slide, * = shake/trill, (x) = grace note. ', h('a', { href: '#learn' }, 'What are these?')));
+    b.append(list);
+    if (settings.showOrnaments) b.append(h('p', { class: 'legend' }, isIndian(settings) ? '~ meend · * gamak · (x) kan swar · ' : '~ slide · * shake · (x) grace note · ', h('a', { href: '#learn' }, 'more')));
+    this.playingLine = -1;
   }
   loopPhrase(i) {
     const p = this.song && this.phrases && this.phrases[i]; if (!p) return;
     this.setLoop(Math.max(0, p.start - 0.4), p.end + 0.5, true);
     this.curPhrase = i; // set after setLoop, which clears it for custom loops
     this.player && this.player.seek(this.loop.a);
-    this.renderPhrases();
+    this.renderPhrases(); this.syncLoopUI();
   }
   stepPhrase(d) {
     if (!this.phrases || !this.phrases.length) return;
@@ -687,6 +890,10 @@ export class SongStudio {
     this.syncLoopUI();
     this.finishTake(true);
   }
+  toggleLoop() {
+    if (!this.loop) return toast('Pick a line below, drag on the strip above the lane, or set A and B.', 'info');
+    this.loopOn = !this.loopOn; this.syncLoopUI();
+  }
   // A marks the start (playback carries on); B marks the end, and looping starts from A.
   markAB(which) {
     if (!this.player) return;
@@ -695,11 +902,11 @@ export class SongStudio {
       this.finishTake(true);
       this.pendingA = t; this.loop = null; this.loopOn = false; this.curPhrase = null;
       this.syncLoopUI(); this.renderPhrases();
-      toast(`Loop start set at ${fmtTime(t)}. Press "B end" where the section should stop.`, 'info', 3500);
+      toast(`Start set at ${fmtTime(t)}. Press B where it should end.`, 'info', 3000);
       return;
     }
     const a = this.pendingA ?? (this.loop ? this.loop.a : null);
-    if (a == null) { toast('Set the start first with "A start".', 'info'); return; }
+    if (a == null) { toast('Set the start first with A.', 'info'); return; }
     if (t <= a + 0.3) { toast('The end needs to be after the start.', 'info'); return; }
     this.setLoop(a, t, true);
     this.player.seek(a);
@@ -712,12 +919,17 @@ export class SongStudio {
     const show = !!(this.loopOn && this.loop);
     const marker = this.pendingA != null ? { a: this.pendingA, b: this.pendingA + 0.05 } : null;
     this.overview.loop = show ? this.loop : marker;
-    this.lane.regions = show ? [{ start: this.loop.a, end: this.loop.b, kind: 'loop' }] : marker ? [{ start: marker.a, end: marker.a + 0.04, kind: 'loop', label: 'A' }] : [];
-    if (this.loopBtn) { this.loopBtn.classList.toggle('on', show); this.loopBtn.disabled = !this.loop; }
+    this.lane.regions = show && !this.coach.active ? [{ start: this.loop.a, end: this.loop.b, kind: 'loop' }] : marker ? [{ start: marker.a, end: marker.a + 0.04, kind: 'loop', label: 'A' }] : [];
+    if (this.loopBtn) { this.loopBtn.classList.toggle('on', show); this.loopBtn.setAttribute('aria-pressed', String(show)); }
     if (this.aBtn) this.aBtn.classList.toggle('on', this.pendingA != null);
+    if (this.learnBtn) {
+      this.learnBtn.hidden = !(show && this.mel && this.loop.b - this.loop.a >= 0.8);
+      this.learnBtn.lastChild.textContent = this.curPhrase != null ? 'Learn this line' : 'Learn this part';
+    }
   }
 
   // ---- transport ---------------------------------------------------------------
+  seekTo(t) { this.player && this.player.seek(t); }
   toggle() {
     if (!this.player) return;
     audioCtx();
@@ -727,26 +939,32 @@ export class SongStudio {
       this.player.play();
     }
   }
-  setMode(m) {
-    this.mode = m;
-    this.player && this.player.mute(m === 'muted');
-    if (m === 'muted' && !this.guideOn) toast('Tip: turn on "Guide tone" to hear the melody as a soft tone while the song is muted.', 'info');
-  }
   async toggleMic() {
     if (mic.running) { mic.stop(); document.dispatchEvent(new CustomEvent('mic-change')); }
     else await ensureMic();
     this.syncMicBtn();
   }
-  syncMicBtn() { this.micBtn.replaceChildren(icon('mic', 15), mic.running ? 'Mic on' : 'Mic'); this.micBtn.classList.toggle('on', mic.running); }
+  syncMicBtn() {
+    if (!this.micBtn) return;
+    this.micBtn.replaceChildren(icon('mic', 17));
+    this.micBtn.classList.toggle('on', mic.running);
+    this.micBtn.setAttribute('aria-pressed', String(mic.running));
+    this.micBtn.title = mic.running ? 'Microphone on (M)' : 'Microphone off (M)';
+  }
   onState(st) {
     this.playBtn.replaceChildren(icon(st === 1 ? 'pause' : 'play', 22));
+    this.playBtn.setAttribute('aria-label', st === 1 ? 'Pause' : 'Play');
     if (st !== 1) this.follower.set(0);
     if (st === 2 || st === 0) this.finishTake(); // paused / ended (not buffering)
     if (st === 0 && this.capturing && this.onCaptureEnd) this.onCaptureEnd(); // video finished: stop capturing
   }
   key(e) {
-    if (!this.active || /INPUT|TEXTAREA|SELECT/.test(document.activeElement && document.activeElement.tagName)) return;
+    if (!this.active || e.defaultPrevented || e.metaKey || e.ctrlKey || e.altKey) return;
+    const ae = document.activeElement;
+    if ((ae && (/INPUT|TEXTAREA|SELECT/.test(ae.tagName) || ae.isContentEditable)) || document.querySelector('dialog[open]')) return;
     const k = e.key;
+    if (this.lyrics.state === 'tap' && k === ' ') { e.preventDefault(); this.lyrics.tap(); return; }
+    if (this.coach.active) { if (this.coach.key && this.coach.key(e)) { e.preventDefault(); return; } if (k === ' ' || /^Arrow(Up|Down)$/.test(k)) return; }
     if (k === ' ') { e.preventDefault(); this.toggle(); }
     else if (k === '[') this.markAB('a');
     else if (k === ']') this.markAB('b');
@@ -756,7 +974,7 @@ export class SongStudio {
     else if (k === 'ArrowUp') { e.preventDefault(); this.stepPhrase(-1); }
     else if (k === 'ArrowDown') { e.preventDefault(); this.stepPhrase(1); }
     else if (k === 'm' || k === 'M') this.toggleMic();
-    else if (k === 'g' || k === 'G') { this.guideOn = !this.guideOn; this.guideChk.checked = this.guideOn; if (!this.guideOn) this.follower.set(0); }
+    else if (k === 'g' || k === 'G') this.setGuide(!this.guideOn);
   }
 
   // ---- main loop ------------------------------------------------------------------
@@ -772,45 +990,57 @@ export class SongStudio {
     this.raf = requestAnimationFrame(step);
   }
   frameStep(c, lastRange, setLastRange) {
-    {
-      const p = this.player;
-      const t = p ? p.time() : 0;
-      const playing = p && p.playing;
-      if (this.timeEl) this.timeEl.textContent = fmtTime(t) + ' / ' + fmtTime(p ? p.duration() : 0);
-      // looping
-      if (playing && this.loopOn && this.loop && t >= this.loop.b) { this.finishTake(); p.seek(this.loop.a); }
-      // mic frames
-      if (mic.running && mic.last && playing && !this.capturing) {
-        const f = mic.last;
-        if (f !== this.lastMicFrame) {
-          this.lastMicFrame = f;
-          const lat = (mic.latencySec() + (c.outputLatency || 0.02) + (settings.latencyMs || 0) / 1000) * (p.r || 1);
-          const st = t - lat;
-          if (this.takeStart == null) { this.takeStart = st; this.startTakeRecording(); }
-          this.frames.push({ t: st, c: f.hz > 0 ? 1200 * Math.log2(f.hz / this.practiceSa) : NaN });
-        }
+    const p = this.player;
+    const t = p ? p.time() : 0;
+    const playing = !!(p && p.playing);
+    const coaching = !!this.coach.active;
+    if (this.timeEl) this.timeEl.textContent = fmtTime(t) + ' / ' + fmtTime(p ? p.duration() : 0);
+    // looping
+    if (playing && this.loopOn && this.loop && t >= this.loop.b) {
+      if (coaching) this.coach.passEnd();
+      else { this.finishTake(); p.seek(this.loop.a); }
+    }
+    if (coaching && this.coach.frame) this.coach.frame(t, playing);
+    // mic frames
+    if (mic.running && mic.last && playing && !this.capturing && this.collect !== false) {
+      const f = mic.last;
+      if (f !== this.lastMicFrame) {
+        this.lastMicFrame = f;
+        const lat = (mic.latencySec() + (c.outputLatency || 0.02) + (settings.latencyMs || 0) / 1000) * (p.r || 1);
+        const st = t - lat;
+        if (this.takeStart == null) { this.takeStart = st; this.startTakeRecording(); }
+        this.frames.push({ t: st, c: f.hz > 0 ? 1200 * Math.log2(f.hz / this.practiceSa) : NaN });
       }
-      // guide tone follows the melody
-      if (this.guideOn && playing && this.mel) {
-        const r = this.refAt(t);
-        this.follower.vol = settings.guideVol;
-        this.follower.set(isNaN(r) ? 0 : this.practiceSa * Math.pow(2, r / 1200));
+    }
+    // guide tone follows the melody
+    if (this.guideOn && playing && this.mel) {
+      const r = this.refAt(t);
+      this.follower.vol = settings.guideVol;
+      this.follower.set(isNaN(r) ? 0 : this.practiceSa * Math.pow(2, r / 1200));
+    }
+    // lane
+    this.lane.now = t;
+    this.lane.user = this.frames.length ? this.frames : this.lastTakeFrames || [];
+    this.lane.hideUserFrom = this.mode === 'blind' && playing ? -1e9 : Infinity;
+    if (!this.lane.fixed && performance.now() - lastRange > 400) { this.lane.autoRange(t - 2, t + 6); setLastRange(performance.now()); }
+    const last = this.frames[this.frames.length - 1];
+    const ref = this.refAt(t);
+    const cls = mic.running ? this.readout.update(last && playing ? last.c : (mic.last && mic.last.hz > 0 ? 1200 * Math.log2(mic.last.hz / this.practiceSa) : NaN), this.practiceSa, ref) : this.readout.update(NaN);
+    this.lane.live = mic.running && this.mode !== 'blind' && last && playing ? { c: last.c, color: cls ? getComputedStyle(this.root).getPropertyValue('--' + cls) : null } : null;
+    this.lane.draw();
+    this.overview.duration = p ? p.duration() || (this.mel ? melodyDuration(this.mel) : 0) : 0;
+    this.overview.now = t;
+    this.overview.draw();
+    this.lyrics.tick(t);
+    // the line being sung, highlighted in the list
+    if (this.phraseEls && !coaching) {
+      let li = -1;
+      for (let i = 0; i < this.phrases.length; i++) if (t >= this.phrases[i].start - 0.2 && t < this.phrases[i].end + 0.3) { li = i; break; }
+      if (li !== this.playingLine) {
+        if (this.phraseEls[this.playingLine]) this.phraseEls[this.playingLine].classList.remove('playing');
+        if (this.phraseEls[li]) this.phraseEls[li].classList.add('playing');
+        this.playingLine = li;
       }
-      // lane
-      this.lane.now = t;
-      this.lane.user = this.frames.length ? this.frames : this.lastTakeFrames || [];
-      this.lane.hideUserFrom = this.mode === 'blind' && playing ? -1e9 : Infinity;
-      if (performance.now() - lastRange > 400) { this.lane.autoRange(t - 2, t + 6); setLastRange(performance.now()); }
-      const last = this.frames[this.frames.length - 1];
-      const ref = this.refAt(t);
-      const cls = mic.running ? this.readout.update(last && playing ? last.c : (mic.last && mic.last.hz > 0 ? 1200 * Math.log2(mic.last.hz / this.practiceSa) : NaN), this.practiceSa, ref) : this.readout.update(NaN);
-      this.lane.live = mic.running && this.mode !== 'blind' && last && playing ? { c: last.c, color: cls ? getComputedStyle(this.root).getPropertyValue('--' + cls) : null } : null;
-      this.chip.textContent = this.capturing ? 'Listening to the song…' : (mic.running && playing ? (this.loopOn ? 'Take in progress' : 'Singing') : '');
-      this.chip.className = 'phase-chip ' + (this.capturing ? 'listen' : 'sing');
-      this.lane.draw();
-      this.overview.duration = p ? p.duration() || (this.mel ? melodyDuration(this.mel) : 0) : 0;
-      this.overview.now = t;
-      this.overview.draw();
     }
   }
 
@@ -828,14 +1058,17 @@ export class SongStudio {
     if (discard || !this.mel || frames.length < 30) return;
     const voiced = frames.filter((f) => !isNaN(f.c)).length;
     if (voiced < 30) return; // didn't really sing
-    const a = this.loopOn && this.loop ? this.loop.a : frames[0].t;
-    const b = this.loopOn && this.loop ? this.loop.b : frames[frames.length - 1].t;
+    const coaching = this.coach.active;
+    const span = coaching ? this.coach.span : null;
+    const a = span ? span.a : this.loopOn && this.loop ? this.loop.a : frames[0].t;
+    const b = span ? span.b : this.loopOn && this.loop ? this.loop.b : frames[frames.length - 1].t;
     const res = analyzeTake({
       frames, refAt: this.refAt, start: a, end: b, tol: settings.tol, octaveFree: settings.octaveFree, tuning: settings.tuning,
       rangeHi: settings.rangeHighMidi != null ? (settings.rangeHighMidi - hzToMidi(this.practiceSa)) * 100 : null,
     });
     this.lastTakeFrames = frames;
-    this.lastTake = { res, blob, a, b, frames };
+    this.lastTake = { res, blob, a, b, frames, phrase: this.loopOn ? this.curPhrase : null };
+    if (coaching) { this.coach.onTake(res, frames, blob); return; }
     if (this.curPhrase != null && this.loopOn && res.refVoicedSec > 0.8) {
       const prev = this.song.best[this.curPhrase];
       if (prev == null || res.score > prev) { this.song.best[this.curPhrase] = res.score; upsertSong(this.song); this.renderPhrases(); }
@@ -845,22 +1078,40 @@ export class SongStudio {
   }
   renderFeedback(res, blob) {
     const f = this.feedback; f.innerHTML = '';
-    const big = h('div', { class: 'score-big ' + (res.score >= 75 ? 'good' : res.score >= 50 ? 'ok' : 'bad'), style: `--p:${res.score}` }, String(res.score));
-    f.append(h('div', { class: 'result-top' }, big, h('div', { class: 'stats' },
-      stat('In tune', Math.round(res.accuracy * 100) + '%'), stat('Sung', Math.round(res.coverage * 100) + '%'),
-      stat('Avg offset', (res.bias > 0 ? '+' : '') + Math.round(res.bias) + '¢'),
-      res.hiBias != null ? stat('High notes', (res.hiBias > 0 ? '+' : '') + Math.round(res.hiBias) + '¢') : null,
-      res.wobble != null ? stat('Wobble', '±' + Math.round(res.wobble) + '¢') : null,
-      res.ornRatio != null ? stat('Ornaments', Math.round(res.ornRatio * 100) + '%') : null)));
+    if (!res) { f.append(h('p', { class: 'empty-note' }, 'Loop a line, turn the mic on and sing. How it went shows up here.')); return; }
+    const cls = res.score >= 75 ? 'good' : res.score >= 50 ? 'ok' : 'bad';
+    f.append(h('div', { class: 'result-top' },
+      h('div', { class: 'score-big ' + cls, style: `--p:${res.score}` }, String(res.score)),
+      h('div', { class: 'stats' }, stat('In tune', pct(res.accuracy)), stat('Sung', pct(res.coverage)), stat('Offset', signed(res.bias) + '¢'))));
+    const tips = res.tips || [];
+    if (tips[0]) {
+      const t = tips[0];
+      f.append(h('div', { class: 'insight ' + (t.level || 'info') }, h('strong', {}, t.title),
+        t.level === 'good' || t.level === 'info' ? h('p', {}, t.detail) : h('details', {}, h('summary', {}, 'How to fix it'), h('p', {}, t.detail), t.drill ? h('a', { class: 'tip-link', href: '#practice/' + t.drill }, 'Open the drill') : null)));
+    }
+    const extra = [];
+    if (res.hiBias != null) extra.push(stat('High notes', signed(res.hiBias) + '¢'));
+    if (res.wobble != null) extra.push(stat('Wobble', '±' + Math.round(res.wobble) + '¢'));
+    if (res.ornRatio != null) extra.push(stat('Ornaments', pct(res.ornRatio)));
     const bias = swaraBiasText(res.perSwara);
-    if (bias.length) f.append(h('p', { class: 'small' }, h('strong', {}, 'Note-by-note tuning: '), describeSwaraBias(bias.slice(0, 4))));
-    f.append(tipList(res.tips));
+    if (extra.length || bias.length || tips.length > 1) {
+      f.append(h('details', { class: 'more' }, h('summary', {}, 'More detail'),
+        extra.length ? h('div', { class: 'stats' }, ...extra) : null,
+        bias.length ? h('p', { class: 'small' }, h('strong', {}, 'Note by note: '), describeSwaraBias(bias.slice(0, 4))) : null,
+        tips.length > 1 ? tipList(tips.slice(1)) : null));
+    }
+    const acts = h('div', { class: 'row wrap acts' });
+    const lt = this.lastTake;
+    if (lt && lt.b - lt.a >= 0.8) acts.append(h('button', { class: 'btn small learn', onclick: () => this.learnRange(lt.a, lt.b, lt.phrase) }, icon('target', 15), lt.phrase != null ? 'Learn this line' : 'Learn this part'));
     if (blob) {
       const url = URL.createObjectURL(blob);
-      const au = h('audio', { controls: true, src: url, class: 'take-audio' });
-      f.append(h('div', { class: 'row wrap' }, h('span', { class: 'small muted' }, 'Your take: '), au,
-        h('button', { class: 'btn small', onclick: () => this.playTakeWithSong(url) }, icon('play', 14), 'Take + song')));
+      const au = new Audio(url);
+      const take = h('button', { class: 'btn small', onclick: () => { if (au.paused) { au.currentTime = 0; au.play(); } else au.pause(); } }, icon('play', 14), 'Your take');
+      au.onplay = () => take.replaceChildren(icon('pause', 14), 'Your take');
+      au.onpause = au.onended = () => take.replaceChildren(icon('play', 14), 'Your take');
+      acts.append(take, h('button', { class: 'btn small', onclick: () => this.playTakeWithSong(url) }, icon('play', 14), 'With the song'));
     }
+    if (acts.children.length) f.append(acts);
   }
   async playTakeWithSong(url) {
     if (!this.lastTake || !this.player) return;
@@ -883,7 +1134,12 @@ export class SongStudio {
 
   // ---- melody capture from this tab (YouTube) --------------------------------------
   async captureTab() {
-    if (!navigator.mediaDevices || !navigator.mediaDevices.getDisplayMedia) return toast('Tab audio capture needs desktop Chrome or Edge. Alternatively upload the song as an audio file.', 'bad', 7000);
+    const why = this.device && this.device.captureBlocker ? this.device.captureBlocker() : (!navigator.mediaDevices || !navigator.mediaDevices.getDisplayMedia ? { title: 'This browser can\'t record a tab', detail: 'Open this site in Chrome or Edge on a computer, or import the song as an audio file.' } : null);
+    if (why) {
+      const dlg = sheet(why.title, h('p', {}, why.detail), { actions: [h('a', { class: 'btn', href: '#settings/device', onclick: () => dlg.close() }, 'Check this device'), h('button', { class: 'btn primary', onclick: () => { dlg.close(); this.toggleAdd(true); } }, 'Import a file instead')] });
+      return;
+    }
+    if (this.busy) return;
     const keepCopy = true; // the recorded copy is what the voice separation runs on
     let stream;
     try {
@@ -892,13 +1148,19 @@ export class SongStudio {
         audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false, suppressLocalAudioPlayback: false },
         preferCurrentTab: true, selfBrowserSurface: 'include', systemAudio: 'exclude', surfaceSwitching: 'exclude',
       });
-    } catch (e) { return toast('Capture cancelled.', 'info'); }
+    } catch (e) {
+      return toast(e && e.name === 'NotAllowedError' ? 'Capture cancelled.' : 'Couldn\'t start the capture: ' + ((e && e.message) || e), 'info', 6000);
+    }
     const at = stream.getAudioTracks()[0];
-    if (!at) { stream.getTracks().forEach((t) => t.stop()); return toast('No audio was shared. Pick this tab and switch on "Also share tab audio".', 'bad', 7000); }
+    if (!at) {
+      stream.getTracks().forEach((t) => t.stop());
+      return toast('No sound was shared. Try again, pick this tab, and keep "Also share tab audio" switched on.', 'bad', 8000);
+    }
     const song = this.song, source = this.source;
     this.busy = true;
     try { await this._capture(stream, at, song, source, keepCopy); }
-    finally { this.busy = false; this.capturing = false; setMasterMuted(false); }
+    catch (e) { console.error(e); toast('Capture failed: ' + e.message, 'bad', 7000); }
+    finally { this.busy = false; this.capturing = false; setMasterMuted(false); stream.getTracks().forEach((t) => t.stop()); this.hideProgress(); }
   }
   async _capture(stream, at, song, source, keepCopy) {
     const c = audioCtx();
@@ -945,18 +1207,12 @@ export class SongStudio {
     const prevRef = this.lane.refAt;
     this.lane.refAt = (t) => { const g = Math.round(t / 0.01); const v = preview.get(g) ?? preview.get(g - 1) ?? preview.get(g + 1); return v == null ? NaN : v - cAbove55(this.songSa); };
     this.lane.message = '';
-    const stopBtn = h('button', { class: 'btn primary' }, icon('stop', 14), 'Finish');
-    const prog = h('span', { class: 'small' });
-    this.status.innerHTML = '';
-    const ring = h('div', { class: 'ring', html: `<svg viewBox="0 0 64 64" aria-hidden="true"><circle class="track" cx="32" cy="32" r="26"/><circle class="fill" cx="32" cy="32" r="26" stroke-dasharray="${2 * Math.PI * 26}" stroke-dashoffset="${2 * Math.PI * 26}"/></svg><span class="pct">0%</span>` });
-    this.status.append(h('div', { class: 'analysis' }, ring, h('div', { class: 'a-body' },
-      h('div', { class: 'a-title' }, 'Listening to the song'),
-      h('p', { class: 'small muted', style: 'margin:0 0 12px' }, 'Let it play to the end. Capture stops by itself when the video finishes, or press Finish to stop early. After that, the voice is separated and the melody traced (a few minutes).'),
-      h('div', { class: 'a-meta' }, prog),
-      h('div', { class: 'a-foot' }, stopBtn, h('span', { class: 'a-note' }, 'Keep this tab open while the song plays.')))));
-    this.captureRing = ring;
-    const startT = 0;
-    if (!this.mel) { p.seek(startT); }
+    const C = 2 * Math.PI * 26;
+    const stopBtn = h('button', { class: 'btn small primary' }, icon('stop', 13), 'Finish');
+    const prog = h('span', { class: 'cb-sub' }, 'Starting…');
+    const ring = h('div', { class: 'ring sm', html: `<svg viewBox="0 0 64 64" aria-hidden="true"><circle class="track" cx="32" cy="32" r="26"/><circle class="fill" cx="32" cy="32" r="26" stroke-dasharray="${C}" stroke-dashoffset="${C}"/></svg>` });
+    this.showOverlay('top', h('div', { class: 'capture-bar', role: 'status' }, ring, h('div', { class: 'cb-text' }, h('strong', {}, 'Listening to the song'), prog), stopBtn));
+    if (!this.mel) p.seek(0);
     p.setRate(1); p.play();
     // map recording time -> video time, so the separated melody can be placed on the video's timeline
     const mapping = [];
@@ -964,9 +1220,9 @@ export class SongStudio {
     if (rec) { rec.ondataavailable = (e) => e.data.size && chunks.push(e.data); rec.start(1000); recStart = performance.now(); }
     const mapTimer = setInterval(() => mapping.push({ rt: (performance.now() - recStart) / 1000, vt: p.time(), on: p.playing }), 100);
     const progTimer = setInterval(() => {
-      const d = p.duration() || 1, f = Math.min(1, p.time() / d), C = 2 * Math.PI * 26;
-      prog.textContent = `${fmtTime(p.time())} of ${fmtTime(p.duration())}`;
-      ring.querySelector('.fill').style.strokeDashoffset = String(C * (1 - f)); ring.querySelector('.pct').textContent = Math.round(f * 100) + '%';
+      const d = p.duration() || 1, f = Math.min(1, p.time() / d);
+      prog.textContent = `${fmtTime(p.time())} of ${fmtTime(p.duration())} · keep this tab open`;
+      ring.querySelector('.fill').style.strokeDashoffset = String(C * (1 - f));
     }, 500);
     await new Promise((res) => {
       stopBtn.onclick = res;
@@ -994,7 +1250,7 @@ export class SongStudio {
     this.showProgress('build', null);
     // assemble grid, merge with any existing melody
     const idx = [...frames.keys()];
-    if (idx.length < 100) { this.lane.refAt = prevRef; this.renderInfo(); return toast('Too little audio was captured. Was tab audio shared?', 'bad'); }
+    if (idx.length < 100) { this.lane.refAt = prevRef; return toast('Too little audio was captured. Was the tab\'s sound shared?', 'bad', 7000); }
     const firstCapture = !this.mel;
     const maxI = Math.max(...idx, this.mel ? this.mel.cents.length - 1 : 0);
     const minI = Math.min(...idx), maxCap = Math.max(...idx);
@@ -1016,7 +1272,7 @@ export class SongStudio {
     // Better melody: separate the voice from the recorded audio, then place it on the video timeline.
     if (copyBlob && copyBlob.size > 50000 && recStart) {
       try {
-        const res = await analyzeBlob(copyBlob, (pr, step, d) => this.showProgress(step, pr, d));
+        const res = await analyzeBlob(copyBlob, (pr, step, d) => { if (this.song === song) this.showProgress(step, pr, d); });
         if (res.separated) {
           const sepCents = placeOnVideo(res.mel, mapping, cents, frames, minI, maxCap);
           if (sepCents) { mel = { hop: 0.01, t0: 0, cents: sepCents }; song[source + 'Separated'] = true; }
@@ -1028,16 +1284,14 @@ export class SongStudio {
           upsertSong(song);
         }
       } catch (e) { console.warn('separation after capture failed', e); }
-      this.hideProgress();
     }
     await idbPut('melody', song.id + ':' + source, packMelody(mel));
-    if (savedCopy) toast('Saved a recorded copy of the song. Switch the source to "Recorded copy" to transpose it, or to hear the voice or the backing track on their own.', 'good', 8000);
+    if (savedCopy) toast('Saved a recorded copy. Use the Source chip to switch to it: then you can transpose, or hear the voice or the backing alone.', 'good', 8000);
     if (firstCapture) { song[source + 'Sa'] = null; upsertSong(song); }
     if (this.song !== song || this.source !== source) return; // user moved on; data is saved for later
     this.mel = mel;
     this.analyzeMelody();
-    this.renderInfo();
-    toast(`Melody guide ready: ${this.phrases.length} lines found.`, 'good');
+    toast(`Melody guide ready: ${this.phrases.length} lines.`, 'good');
   }
 
   async analyzeAudio() {
@@ -1054,52 +1308,53 @@ export class SongStudio {
       song.audioSa = null; song.audioSeparated = separated; upsertSong(song);
       if (this.song === song && this.source === 'audio') {
         if (vocals && this.player && this.player.kind === 'audio') this.player.setVocals(vocals);
-        this.hideProgress();
         this.mel = mel;
-        this.analyzeMelody(); this.renderInfo();
-        toast(`Melody guide ready: ${this.phrases.length} lines found.`, 'good');
+        this.busy = false;
+        this.analyzeMelody();
+        toast(`Melody guide ready: ${this.phrases.length} lines.`, 'good');
       }
-    } catch (e) { this.hideProgress(); toast('Analysis failed: ' + e.message, 'bad', 7000); }
-    finally { this.busy = false; }
+    } catch (e) { toast('Analysis failed: ' + e.message, 'bad', 7000); }
+    finally { this.busy = false; this.hideProgress(); }
   }
 
   // ---- adding songs ---------------------------------------------------------------
   async addUrl(url) {
     if (/spotify\.com/.test(url)) {
-      toast('Spotify can\'t be embedded for full playback. Open the song in another Chrome tab, then use "Record from another tab". Afterwards it behaves like an audio file (loop, slow down, transpose).', 'info', 10000);
+      toast('Spotify can\'t be embedded. Play the song in another Chrome tab, then use "Record from another tab".', 'info', 9000);
       return;
     }
     const id = parseYouTubeId(url);
     if (!id) return toast('That doesn\'t look like a YouTube link.', 'bad');
     const s = upsertSong({ id: 'yt-' + id, kind: 'youtube', videoId: id, title: 'YouTube ' + id, created: new Date().toISOString() });
-    this.ytInput.value = ''; this.addBox.classList.remove('open');
+    this.ytInput.value = ''; this.toggleAdd(false);
     await this.open(s.id);
   }
   async addFile(file) {
     const id = 'au-' + Date.now().toString(36);
     await idbPut('audio', id, file);
     upsertSong({ id, kind: 'audio', title: file.name.replace(/\.[^.]+$/, ''), created: new Date().toISOString() });
-    this.addBox.classList.remove('open');
+    this.toggleAdd(false);
     await this.open(id);
     await this.analyzeAudio();
   }
   async recordOtherTab() {
-    if (!navigator.mediaDevices || !navigator.mediaDevices.getDisplayMedia) return toast('Recording another tab needs desktop Chrome or Edge.', 'bad');
+    const why = this.device && this.device.captureBlocker ? this.device.captureBlocker() : null;
+    if (why || !navigator.mediaDevices || !navigator.mediaDevices.getDisplayMedia) return toast(why ? why.detail : 'Recording another tab needs Chrome or Edge on a computer.', 'bad', 8000);
     let stream;
     try {
       stream = await navigator.mediaDevices.getDisplayMedia({ video: { frameRate: 1, width: 320, height: 180 }, audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false }, selfBrowserSurface: 'exclude', systemAudio: 'include' });
     } catch { return; }
     const at = stream.getAudioTracks()[0];
-    if (!at) { stream.getTracks().forEach((t) => t.stop()); return toast('No audio shared. Pick the tab with the song and switch on "Also share tab audio".', 'bad', 7000); }
+    if (!at) { stream.getTracks().forEach((t) => t.stop()); return toast('No sound was shared. Pick the tab with the song and keep "Also share tab audio" on.', 'bad', 8000); }
     const rec = new MediaRecorder(new MediaStream([at]), { audioBitsPerSecond: 160000 });
     const chunks = [];
     rec.ondataavailable = (e) => e.data.size && chunks.push(e.data);
     rec.start(1000);
     const t0 = Date.now();
-    const name = h('input', { type: 'text', placeholder: 'Song name', value: 'Recorded song' });
+    const name = h('input', { type: 'text', placeholder: 'Song name', value: 'Recorded song', 'aria-label': 'Song name' });
     const timer = h('span', { class: 'mono' }, '0:00');
-    const stop = h('button', { class: 'btn primary' }, icon('stop', 14), 'Stop recording');
-    const box = h('div', { class: 'callout' }, h('p', {}, 'Recording the other tab. Play the song there from the start, and press Stop when it ends.'), h('div', { class: 'row' }, name, timer, stop));
+    const stop = h('button', { class: 'btn small primary' }, icon('stop', 13), 'Stop');
+    const box = h('div', { class: 'rec-bar' }, h('span', { class: 'rec-dot' }), h('div', { class: 'cb-text' }, h('strong', {}, 'Recording the other tab'), h('span', { class: 'cb-sub' }, 'Play the song there from the start, then press Stop.')), name, timer, stop);
     this.addBox.append(box);
     const iv = setInterval(() => (timer.textContent = fmtTime((Date.now() - t0) / 1000)), 500);
     await new Promise((res) => { stop.onclick = res; at.addEventListener('ended', res, { once: true }); });
@@ -1108,50 +1363,34 @@ export class SongStudio {
     stream.getTracks().forEach((t) => t.stop());
     box.remove();
     const blob = new Blob(chunks, { type: rec.mimeType || 'audio/webm' });
-    if (blob.size < 20000) return toast('The recording is empty. Was tab audio shared?', 'bad');
+    if (blob.size < 20000) return toast('The recording is empty. Was the tab\'s sound shared?', 'bad');
     const id = 'au-' + Date.now().toString(36);
     await idbPut('audio', id, blob);
     upsertSong({ id, kind: 'audio', title: name.value || 'Recorded song', created: new Date().toISOString() });
-    this.addBox.classList.remove('open');
+    this.toggleAdd(false);
     await this.open(id);
     await this.analyzeAudio();
   }
   remove() {
     if (!this.song) return;
-    if (!confirm(`Remove "${this.song.title}" and its melody/practice data from this browser?`)) return;
+    if (!confirm(`Remove "${this.song.title}" and its melody and practice data from this browser?`)) return;
     const id = this.song.id;
     if (this.player) this.player.destroy();
     this.player = null; this.song = null; this.mel = null;
     removeSong(id);
-    this.refreshSelect();
     this.open(songs[0] && songs[0].id);
   }
 
-  // ---- reference repair tools ---------------------------------------------------------
-  renderTools() {
-    const t = this.tools; t.innerHTML = '';
-    t.append(h('summary', {}, 'Fix the melody guide / sync (advanced)'));
-    const syncOut = h('span', { class: 'mono' }, (this.song.sync || 0) + ' ms');
-    const sync = h('input', { type: 'range', min: -400, max: 400, step: 10, value: this.song.sync || 0, oninput: (e) => { this.song.sync = +e.target.value; syncOut.textContent = this.song.sync + ' ms'; }, onchange: () => upsertSong(this.song) });
-    t.append(
-      h('p', { class: 'small muted' }, 'Instruments (flute, violin, harmonium) can sometimes fool the melody extractor. Set a loop (drag on the overview strip, or press A/B) over the bad stretch and fix it:'),
-      h('div', { class: 'row wrap' },
-        h('button', { class: 'btn small', onclick: () => this.editRegion('up') }, 'Octave ↑'),
-        h('button', { class: 'btn small', onclick: () => this.editRegion('down') }, 'Octave ↓'),
-        h('button', { class: 'btn small', onclick: () => this.editRegion('erase') }, 'Erase (not the singer)'),
-        h('button', { class: 'btn small', onclick: () => this.undoEdit() }, 'Undo')),
-      h('label', { class: 'ctl' }, 'Guide sync ', sync, ' ', syncOut),
-      h('p', { class: 'small muted' }, 'If the line is consistently ahead or behind the singer\'s voice, nudge the sync.'),
-    );
-  }
+  // ---- melody guide repair ---------------------------------------------------------------
   async editRegion(op) {
-    if (!this.mel || !this.loop) return toast('Set a loop region first (drag on the overview strip).', 'info');
+    if (!this.mel || !this.loop) return toast('Set a loop over the bad stretch first (drag on the strip above the lane).', 'info');
     this.undo = Float32Array.from(this.mel.cents);
     const { hop, t0, cents } = this.mel;
     const a = Math.max(0, Math.floor((this.loop.a - t0) / hop)), b = Math.min(cents.length, Math.ceil((this.loop.b - t0) / hop));
     for (let i = a; i < b; i++) { if (isNaN(cents[i])) continue; cents[i] = op === 'up' ? cents[i] + 1200 : op === 'down' ? cents[i] - 1200 : NaN; }
     await idbPut('melody', this.song.id + ':' + this.source, packMelody(this.mel));
     this.analyzeMelody();
+    toast(op === 'erase' ? 'Erased from the guide.' : 'Moved an octave ' + (op === 'up' ? 'up.' : 'down.'), 'good', 2000);
   }
   async undoEdit() {
     if (!this.undo || !this.mel) return;

@@ -273,7 +273,7 @@ function renderProgress() {
 
 // ---------------------------------------------------------------------------
 // Settings
-function renderSettings() {
+function renderSettings(sub) {
   const root = $('#page-settings'); root.innerHTML = '';
   const field = (label, ctl, help) => h('label', { class: 'field' }, h('span', { class: 'flabel' }, label), ctl, help ? h('small', { class: 'muted' }, help) : null);
   const notes = []; for (let m = 36; m <= 72; m++) notes.push(m);
@@ -288,6 +288,11 @@ function renderSettings() {
   };
   const chk = (key) => h('input', { type: 'checkbox', checked: !!settings[key], onchange: (e) => saveSettings({ [key]: e.target.checked }) });
   const ind = isIndian(settings);
+  // "Check this device": browser, tab capture, graphics card, mic and delay (js/device.js)
+  const deviceHost = h('div', { class: 'device-host' }, h('p', { class: 'small muted' }, 'Checking…'));
+  const deviceCard = h('div', { class: 'card form', id: 'device' }, h('h3', {}, 'This device'), deviceHost);
+  import('./device.js').then((m) => { deviceHost.innerHTML = ''; m.renderDeviceCheck(deviceHost); if (sub === 'device') deviceCard.scrollIntoView({ block: 'start' }); })
+    .catch(() => { deviceHost.replaceChildren(h('p', { class: 'small muted' }, 'The device check couldn\'t load.')); });
   const styleSel = h('select', { onchange: (e) => { saveSettings({ notation: e.target.value }); renderSettings(); } },
     ...[['western', 'General: any song (note names C D E, scale degrees 1–7)'], ['hindustani', 'Indian, Hindustani sargam (S R G m P D N)'], ['carnatic', 'Indian, Carnatic (S R1 R2 G2 G3 M1 …)']]
       .map(([v, l]) => h('option', { value: v, selected: settings.notation === v }, l)));
@@ -322,16 +327,17 @@ function renderSettings() {
     ),
     h('div', { class: 'card form' },
       h('h3', {}, 'Audio'),
-      field('Voice separation', sel('sepQuality', [['fast', 'Fast: Spleeter, about a minute'], ['balanced', 'Balanced: Kim Vocal 2, seconds with a graphics card'], ['best', 'Best: Mel-RoFormer, 464 MB download once, a few minutes (needs a graphics card)']]), 'Used when a song is analysed. In testing on 50 real songs: Fast traced 72% of sung notes correctly, Balanced 87%, Best (Mel-RoFormer blended with Kim) 90%, with fewer false notes.'),
+      field('Voice separation', h('select', { onchange: (e) => saveSettings({ sepQuality: e.target.value, sepQualityChosen: true }) }, ...[['fast', 'Fast: Spleeter, about a minute'], ['balanced', 'Balanced: Kim Vocal 2, seconds with a graphics card'], ['best', 'Best: Mel-RoFormer, 464 MB download once, a few minutes (needs a graphics card)']].map(([v, l]) => h('option', { value: v, selected: (settings.sepQuality || 'balanced') === v }, l))), 'Used when a song is analysed. Without a graphics card in the browser, Fast is used unless you pick another here. In testing on 50 real songs: Fast traced 72% of sung notes correctly, Balanced 87%, Best (Mel-RoFormer blended with Kim) 90%, with fewer false notes.'),
       field('Headphones', h('span', {}, chk('headphones'), ' I sing with headphones'), 'With speakers, leave this off: echo cancellation removes the song from your microphone so it isn\'t mistaken for your voice. With headphones, switch it on for the cleanest pitch.'),
       field('Mic sensitivity', range('micSens', 0, 1, 0.05, (v) => Math.round(v * 100) + '%'), 'Raise it if quiet singing isn\'t detected; lower it if room noise is drawn as pitch.'),
       field('Guide volume', range('guideVol', 0, 1, 0.05, (v) => Math.round(v * 100) + '%')),
       field('Guide sound', sel('guideTimbre', [['reed', 'Harmonium-like'], ['sine', 'Pure tone']])),
-      field('Extra latency compensation', range('latencyMs', 0, 400, 10, (v) => v + ' ms'), 'If you\'re always reported "behind" with the same amount, set it here (Bluetooth: try 150–250 ms).'),
+      field('Extra latency compensation', range('latencyMs', -200, 600, 10, (v) => v + ' ms'), 'Measured for you by "Delay" below. Or set it by hand if you\'re always reported behind by the same amount (Bluetooth: try 150–250 ms).'),
     ),
+    deviceCard,
     h('div', { class: 'card form' },
       h('h3', {}, 'Data & about'),
-      h('p', { class: 'small muted' }, 'Everything (songs, melodies, recordings, progress) stays in this browser. Nothing is uploaded. Swara Lab is free and open source.'),
+      h('p', { class: 'small muted' }, 'Everything (songs, melodies, recordings, progress) stays in this browser. Nothing is uploaded. To find lyrics, the song\'s title is looked up in LRCLIB, an open lyrics library. Swara Lab is free and open source.'),
       h('div', { class: 'row wrap' },
         h('button', { class: 'btn', onclick: () => { const b = new Blob([JSON.stringify({ settings, progress, songs }, null, 1)], { type: 'application/json' }); const a = h('a', { href: URL.createObjectURL(b), download: 'swara-lab-backup.json' }); a.click(); } }, icon('download', 16), 'Export backup'),
         h('button', { class: 'btn', onclick: () => showTour() }, icon('sparkle', 16), 'Show the tour'),
@@ -399,7 +405,7 @@ function removeOldServiceWorker() {
 const ALIAS = { song: 'songs', warmup: 'practice/warmup', drills: 'practice', range: 'practice/range' };
 function route() {
   let hash = location.hash.slice(1) || 'today';
-  let [page, sub] = hash.split('/');
+  let [page, sub, arg] = hash.split('/');
   if (page === 'drills' && sub) { location.replace('#practice/' + sub); return; }
   if (ALIAS[page]) { location.replace('#' + ALIAS[page]); return; }
   const ROUTES = ['today', 'songs', 'practice', 'progress', 'learn', 'settings'];
@@ -413,10 +419,15 @@ function route() {
   document.title = page === 'today' ? 'Swara Lab · singing trainer' : `${page[0].toUpperCase() + page.slice(1)} · Swara Lab`;
   if (pageId === 'today') renderToday();
   if (pageId === 'practice') renderPractice(sub);
-  if (pageId === 'song') { if (!pages.song) pages.song = new SongStudio($('#page-song')); pages.song.activate(); pages.song.syncMicBtn(); }
+  if (pageId === 'song') {
+    if (!pages.song) pages.song = new SongStudio($('#page-song'));
+    pages.song.activate(); pages.song.syncMicBtn();
+    pages.song.route(sub, arg);
+  }
   if (pageId === 'progress') renderProgress();
-  if (pageId === 'settings') renderSettings();
-  window.scrollTo(0, 0);
+  if (pageId === 'settings') renderSettings(sub);
+  document.querySelector('main').classList.toggle('wide', pageId === 'song');
+  if (!(pageId === 'settings' && sub)) window.scrollTo(0, 0);
 }
 
 applyTheme();

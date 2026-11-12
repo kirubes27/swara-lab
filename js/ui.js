@@ -1,6 +1,7 @@
 // Tiny DOM helpers shared by all pages.
 import { mic } from './audio.js';
 import { settings } from './store.js';
+import { icon } from './icons.js';
 
 export function h(tag, attrs = {}, ...kids) {
   const el = document.createElement(tag);
@@ -52,4 +53,82 @@ export function fmtTime(s) {
   if (!isFinite(s)) return '0:00';
   const m = Math.floor(s / 60), x = Math.floor(s % 60);
   return m + ':' + String(x).padStart(2, '0');
+}
+
+// ---- popovers, menus, sheets --------------------------------------------------------
+// One small floating panel at a time, anchored to the button that opened it.
+let openPop = null;
+export function closePopover() { if (openPop) { const p = openPop; openPop = null; p.close(); } }
+export function popover(anchor, content, { align = 'start', className = '', onClose } = {}) {
+  if (openPop && openPop.anchor === anchor) { closePopover(); return null; } // a second click closes it
+  closePopover();
+  const el = h('div', { class: 'pop ' + className }, content);
+  document.body.append(el);
+  const place = () => {
+    const r = anchor.getBoundingClientRect(), w = el.offsetWidth, ht = el.offsetHeight;
+    let x = align === 'end' ? r.right - w : align === 'center' ? r.left + r.width / 2 - w / 2 : r.left;
+    x = Math.max(8, Math.min(window.innerWidth - w - 8, x));
+    let y = r.bottom + 8;
+    if (y + ht > window.innerHeight - 8 && r.top - ht - 8 > 8) y = r.top - ht - 8;
+    el.style.left = Math.round(x) + 'px'; el.style.top = Math.round(Math.max(8, y)) + 'px';
+  };
+  place();
+  anchor.setAttribute('aria-expanded', 'true');
+  const onDown = (e) => { if (!el.contains(e.target) && !anchor.contains(e.target)) closePopover(); };
+  const onKey = (e) => { if (e.key === 'Escape') { closePopover(); anchor.focus(); } };
+  setTimeout(() => document.addEventListener('pointerdown', onDown, true));
+  document.addEventListener('keydown', onKey);
+  window.addEventListener('resize', place); window.addEventListener('scroll', place, true);
+  const handle = {
+    anchor, el, place,
+    close: () => {
+      el.classList.add('out'); setTimeout(() => el.remove(), 150);
+      anchor.setAttribute('aria-expanded', 'false');
+      document.removeEventListener('pointerdown', onDown, true); document.removeEventListener('keydown', onKey);
+      window.removeEventListener('resize', place); window.removeEventListener('scroll', place, true);
+      onClose && onClose();
+    },
+  };
+  openPop = handle;
+  const first = el.querySelector('button:not([disabled]), input, select, textarea');
+  if (first && anchor.matches(':focus-visible')) first.focus();
+  return handle;
+}
+// items: { label, sub, icon, checked, disabled, danger, onclick } | 'sep' | { head } | { el }
+export function menu(anchor, items, opts = {}) {
+  const list = h('div', { class: 'menu', role: 'menu' });
+  for (const it of items) {
+    if (!it) continue;
+    if (it === 'sep') { list.append(h('div', { class: 'menu-sep', role: 'separator' })); continue; }
+    if (it.head) { list.append(h('div', { class: 'menu-head' }, it.head)); continue; }
+    if (it.el) { list.append(it.el); continue; }
+    list.append(h('button', {
+      class: 'menu-item' + (it.checked ? ' checked' : '') + (it.danger ? ' danger' : ''), role: it.checked != null ? 'menuitemradio' : 'menuitem',
+      'aria-checked': it.checked != null ? String(!!it.checked) : null, disabled: it.disabled, title: it.title,
+      onclick: () => { if (!it.keepOpen) closePopover(); it.onclick && it.onclick(); },
+    },
+    h('span', { class: 'mi-ic' }, it.checked ? icon('check', 15) : it.icon ? icon(it.icon, 16) : null),
+    h('span', { class: 'mi-text' }, h('span', {}, it.label), it.sub ? h('small', {}, it.sub) : null),
+    it.end ? h('span', { class: 'mi-end' }, it.end) : null));
+  }
+  return popover(anchor, list, opts);
+}
+// A centred dialog for anything that needs more room than a menu.
+export function sheet(title, body, { actions = [], onClose, wide = false } = {}) {
+  closePopover();
+  const dlg = h('dialog', { class: 'sheet' + (wide ? ' wide' : '') });
+  const close = () => { if (dlg.open) dlg.close(); };
+  dlg.append(
+    h('div', { class: 'sheet-head' }, h('h3', {}, title), h('button', { class: 'icon-btn', 'aria-label': 'Close', onclick: close }, icon('close', 18))),
+    h('div', { class: 'sheet-body' }, body),
+    actions.length ? h('div', { class: 'sheet-foot' }, ...actions) : null);
+  dlg.addEventListener('close', () => { dlg.remove(); onClose && onClose(); });
+  dlg.addEventListener('pointerdown', (e) => { if (e.target === dlg) close(); }); // click on the backdrop
+  document.body.append(dlg);
+  dlg.showModal();
+  return { el: dlg, close };
+}
+export function chipBtn(label, value, { onclick, tone = '', title } = {}) {
+  return h('button', { class: 'chip-btn' + (tone ? ' ' + tone : ''), title, onclick, 'aria-haspopup': 'dialog' },
+    label ? h('span', { class: 'cl' }, label) : null, h('span', { class: 'cv' }, value));
 }
