@@ -1,5 +1,5 @@
 // Exercise model: a mini sargam notation, plan builder, target-contour lookup and library.
-import { swaraCents, SCALES, SWARA_SHORT, SWARA_LONG, isIndian } from './music.js';
+import { swaraCents, SCALES, SWARA_SHORT, SWARA_LONG, isIndian, wrapCents, clamp } from './music.js';
 
 const LETTERS = { S: 0, r: 1, R: 2, g: 3, G: 4, m: 5, M: 6, P: 7, d: 8, D: 9, n: 10, N: 11 };
 
@@ -135,12 +135,17 @@ export function parseSargam(text, { bpm = 60, tuning = 'et', scale = SCALES.majo
   // convert beats to seconds
   const spb = 60 / bpm;
   for (const e of events) { e.t *= spb; e.dur *= spb; }
-  return { events, duration: beat * spb };
+  return { events, duration: beat * spb, beat: spb }; // beat: seconds per beat
 }
 
 // ---------------------------------------------------------------------------
 // Plans: sequences of segments, each 'listen' (guide plays), 'sing' (scored) or 'together'.
-export function makePlan(lines, { echo = true, gap = 0.6, transposeEach = null } = {}) {
+// Gaps follow the tempo: 2 beats after a 'listen' line (at least 0.9 s), so a count-in fits
+// before "Your turn", and 1 beat after a sung line (at least 0.6 s). beat = seconds per beat
+// (defaults to the lines' own tempo); a fixed `gap` in seconds overrides both.
+export function makePlan(lines, { echo = true, beat = null, gap = null, transposeEach = null } = {}) {
+  const spb = beat || (lines.find((l) => l.beat) || {}).beat || 0;
+  const gapAfter = (mode) => (gap != null ? gap : mode === 'listen' ? Math.max(0.9, 2 * spb) : Math.max(0.6, spb));
   const segments = [];
   let t = 0;
   lines.forEach((line, li) => {
@@ -149,7 +154,7 @@ export function makePlan(lines, { echo = true, gap = 0.6, transposeEach = null }
     const modes = echo ? ['listen', 'sing'] : ['together'];
     for (const mode of modes) {
       segments.push({ mode, start: t, end: t + line.duration, line: li, events: ev.map((e) => ({ ...e, t: e.t + t })) });
-      t += line.duration + gap;
+      t += line.duration + gapAfter(mode);
     }
   });
   return { segments, duration: t };
@@ -219,6 +224,117 @@ export function scoredNotes(plan) {
     for (const e of s.events) if (e.kind === 'note' && e.dur >= 0.15) out.push({ ...e, seg: s });
   }
   return out;
+}
+
+// ---------------------------------------------------------------------------
+// Timing-tolerant scoring. Singers answering a line come in a little late (reaction time),
+// and at the exact plan time each sung note would be compared with the previous target.
+// alignTake estimates one constant offset per scored segment and shifts that segment's
+// frames by it, so the notes are judged on pitch; the offsets are returned for timing feedback.
+// frames: [{t, c}] in time order (cents rel Sa, NaN = unvoiced). Input frames are not modified,
+// and each one lands in the output at most once.
+const LAG_RANGE = { sing: [-0.25, 0.8], together: [-0.15, 0.35] }; // s: how early / late a singer may be
+const WIN_PRE = 0.3, WIN_POST = 0.9; // a segment owns user frames from start - 0.3 s to end + 0.9 s
+
+function lowerBound(frames, t) {
+  let lo = 0, hi = frames.length;
+  while (lo < hi) { const m = (lo + hi) >> 1; if (frames[m].t < t) lo = m + 1; else hi = m; }
+  return lo;
+}
+// n values on a grid from time a: the nearest voiced frame within 30 ms (as analyzeTake does)
+function resample(frames, a, n, hop) {
+  const out = new Float32Array(n).fill(NaN);
+  let j = lowerBound(frames, a - 0.03);
+  for (let i = 0; i < n; i++) {
+    const t = a + i * hop;
+    while (j < frames.length && frames[j].t <= t - 0.03) j++;
+    let bd = 0.03;
+    for (let k = j; k < frames.length && frames[k].t < t + 0.03; k++) {
+      const d = Math.abs(frames[k].t - t);
+      if (d < bd && !isNaN(frames[k].c)) { bd = d; out[i] = frames[k].c; }
+    }
+  }
+  return out;
+}
+
+// The singer's constant offset (s) against one segment, or null when it can't be told.
+function segmentLag(s, frames, [lo, hi], octaveFree) {
+  const hop = 0.01;
+  const n = Math.floor((s.end - s.start) / hop);
+  const R = new Float32Array(n);
+  let rMin = Infinity, rMax = -Infinity;
+  for (let i = 0; i < n; i++) {
+    const t = s.start + i * hop;
+    let v = NaN;
+    for (const e of s.events) { v = evAt(e, t); if (!isNaN(v)) break; }
+    R[i] = v;
+    if (!isNaN(v)) { rMin = Math.min(rMin, v); rMax = Math.max(rMax, v); }
+  }
+  if (!(rMax - rMin >= 80)) return null; // one held pitch: no note changes to time against
+  let voiced = 0;
+  for (let k = lowerBound(frames, s.start + lo); k < frames.length && frames[k].t < s.end + hi; k++) if (!isNaN(frames[k].c)) voiced++;
+  if (voiced < 25) return null;
+  const k0 = Math.round(lo / hop), k1 = Math.round(hi / hop);
+  const U = resample(frames, s.start + k0 * hop, n + k1 - k0, hop);
+  // error at each candidate lag: mean of min(|deviation|, 300 cents) over frames where both are voiced
+  const cand = [];
+  for (let k = k0; k <= k1; k++) {
+    let e = 0, m = 0;
+    for (let i = 0; i < n; i++) {
+      const r = R[i], u = U[i + k - k0];
+      if (isNaN(r) || isNaN(u)) continue;
+      const d = octaveFree ? wrapCents(u - r) : u - r;
+      e += Math.min(300, Math.abs(d)); m++;
+    }
+    cand.push({ lag: Math.round(k * hop * 1000) / 1000, err: m ? e / m : Infinity, m });
+  }
+  // ignore shifts that only line up a sliver of the singing
+  const maxM = Math.max(...cand.map((x) => x.m));
+  const ok = cand.filter((x) => x.m >= 25 && x.m >= 0.5 * maxM);
+  if (!ok.length) return null;
+  let best = ok[0];
+  for (const x of ok) if (x.err < best.err - 1e-6 || (x.err <= best.err + 1e-6 && Math.abs(x.lag) < Math.abs(best.lag))) best = x;
+  if (best.err > 150) return null; // the melody wasn't followed at any shift: timing can't be told
+  const zero = ok.find((x) => x.lag === 0);
+  // prefer no shift unless another one is clearly better
+  return best.err <= 0.85 * (zero ? zero.err : Infinity) ? best.lag : 0;
+}
+
+// -> { frames: aligned [{t, c}] sorted by t, lags: [{seg, lag, ok}] } for the 'sing' and
+// 'together' segments; ok = there was enough singing (and melody movement) to measure.
+export function alignTake(plan, frames, { octaveFree = true } = {}) {
+  if (frames.some((f, i) => i && f.t < frames[i - 1].t)) frames = [...frames].sort((a, b) => a.t - b.t);
+  const segs = plan.segments.filter((s) => LAG_RANGE[s.mode]).sort((a, b) => a.start - b.start);
+  const lags = segs.map((seg) => {
+    const lag = segmentLag(seg, frames, LAG_RANGE[seg.mode], octaveFree);
+    return { seg, lag: lag || 0, ok: lag != null };
+  });
+  // Raw-time windows the segments draw frames from. Where neighbouring windows overlap, split
+  // them halfway between where one sung line ends and the next begins.
+  const win = lags.map(({ seg, lag }) => ({ a: seg.start - WIN_PRE, b: seg.end + WIN_POST, lag }));
+  for (let k = 0; k + 1 < win.length; k++) {
+    const p = win[k], q = win[k + 1];
+    if (p.b > q.a) p.b = q.a = clamp((segs[k].end + p.lag + segs[k + 1].start + q.lag) / 2, q.a, p.b);
+  }
+  // Where those frames land once shifted (ca..cb). Overlaps are split down the middle, and
+  // frames outside every window are kept only where no shifted segment landed.
+  for (const w of win) { w.ca = w.a - w.lag; w.cb = w.b - w.lag; }
+  for (let k = 0; k + 1 < win.length; k++) {
+    const p = win[k], q = win[k + 1];
+    if (p.cb > q.ca) p.cb = q.ca = (p.cb + q.ca) / 2;
+  }
+  const out = [];
+  let k = 0;
+  for (const f of frames) {
+    while (k < win.length && f.t >= win[k].b) k++;
+    const w = win[k];
+    if (w && f.t >= w.a) {
+      const t = f.t - w.lag;
+      if (t >= w.ca && t < w.cb) out.push(w.lag ? { ...f, t } : f);
+    } else if (!win.some((x) => f.t >= x.ca && f.t < x.cb)) out.push(f);
+  }
+  out.sort((a, b) => a.t - b.t);
+  return { frames: out, lags };
 }
 
 // ---------------------------------------------------------------------------

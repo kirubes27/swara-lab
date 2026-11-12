@@ -9,7 +9,7 @@ const API = 'https://lrclib.net/api';
 
 // ---- finding the right lyrics -------------------------------------------------------------
 const JUNK_BRACKET = /official|video|audio|lyric|visuali[sz]er|\bmv\b|\bhd\b|\bhq\b|\b4k\b|full song|remaster|explicit|out now|teaser|trailer|\bfrom\b|\bost\b|soundtrack|letra|song/i;
-const JUNK_WORDS = /\b(official (music |lyric )?video|official audio|lyric(al)? video|lyrical|lyrics?|video song|full video( song)?|full song|music video|official|audio|visuali[sz]er|hd|hq|4k|mv)\b/gi;
+const JUNK_WORDS = /\b(official (music |lyric )?video|official audio|lyric(al)? video|lyrical|lyrics?|video song|full video( song)?|full song|music video|official|video|audio|visuali[sz]er|hd|hq|4k|mv)\b/gi;
 const STOP = new Set(['the', 'a', 'an', 'of', 'and', 'from', 'feat', 'ft', 'by', 'in', 'on', 'to', 'la', 'le', 'de', 'el']);
 const VARIANTS = ['instrumental', 'karaoke', 'reprise', 'remix', 'sped up', 'slowed', 'lofi', 'lo-fi', '8d', 'cover', 'live', 'acoustic', 'trending', 'flip', 'version', 'mashup', 'unplugged', 'reverb'];
 

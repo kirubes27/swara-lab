@@ -3,7 +3,7 @@ import { audioCtx } from './audio.js';
 import { mic } from './audio.js';
 import { tanpura, guide } from './sound.js';
 import { PitchLane } from './lane.js';
-import { EXERCISES, exText, parseSargam, makePlan, planRefAt, planCurves, scoredNotes, pitchMatchLines } from './exercises.js';
+import { EXERCISES, exText, parseSargam, makePlan, planRefAt, planCurves, scoredNotes, pitchMatchLines, alignTake } from './exercises.js';
 import { analyzeTake, swaraBiasText, describeSwaraBias } from './coach.js';
 import { SCALES, scaleList, scaleLabel, saHzFrom, nearestSwara, swaraLabel, noteText, isIndian, term, wrapCents, westernName, hzToMidi, median, clamp } from './music.js';
 import { settings, logActivity } from './store.js';
@@ -145,7 +145,7 @@ export class ExercisePlayer {
   preview() {
     try {
       const { lines, echo, transposeEach } = this.buildLines();
-      this.plan = makePlan(lines, { echo, transposeEach });
+      this.plan = makePlan(lines, { echo, transposeEach, beat: 60 / this.bpm });
       this.setupLane();
       this.lane.now = -0.5;
       this.drawIdle();
@@ -171,7 +171,8 @@ export class ExercisePlayer {
     this.starting = true;
     try { if (!(await ensureMic())) return; } finally { this.starting = false; }
     if (this.running) return;
-    try { const { lines, echo, transposeEach } = this.buildLines(); this.plan = makePlan(lines, { echo, transposeEach }); }
+    const spb = 60 / this.bpm;
+    try { const { lines, echo, transposeEach } = this.buildLines(); this.plan = makePlan(lines, { echo, transposeEach, beat: spb }); }
     catch (e) { toast(e.message, 'bad'); return; }
     const c = audioCtx();
     const sa = saHzFrom(settings);
@@ -179,31 +180,47 @@ export class ExercisePlayer {
     this.result.innerHTML = '';
     this.frames = [];
     this.lane.user = this.frames;
-    const spb = 60 / this.bpm;
-    const lead = Math.max(1.2, 2 * spb + 0.3);
-    this.T0 = c.currentTime + lead;
-    guide.vol = settings.guideVol; guide.timbre = settings.guideTimbre;
-    guide.click(this.T0 - 2 * spb, true); guide.click(this.T0 - spb);
-    const groups = planCurves(this.plan, sa).map((g) => ({ ...g, start: g.start + this.T0, end: g.end + this.T0 }));
-    guide.playCurves(groups);
+    // the drone first: building its sound can block for a moment, which must not eat into the count-in
     this.duckedTanpura = this.def.tanpura === false && tanpura.on;
     if (this.duckedTanpura) tanpura.duck(true);
     if (this.def.tanpura && !tanpura.on && settings.autoTanpura !== false) { tanpura.start(sa, settings.tanpuraFirst); this.startedTanpura = true; }
-    const lat = mic.latencySec() + (c.outputLatency || 0) + (settings.latencyMs || 0) / 1000;
+    const lead = Math.max(1.2, 2 * spb + 0.3);
+    this.T0 = c.currentTime + lead;
+    guide.vol = settings.guideVol; guide.timbre = settings.guideTimbre;
+    // Count-in: two clicks on the beats before the start and before every "Your turn"; the
+    // second (accented) click is the last beat before singing. Clicks are scheduled just
+    // ahead of time from the loop, so Stop silences the rest.
+    const cues = [0, ...this.plan.segments.filter((s) => s.mode === 'sing' && s.start > 0).map((s) => s.start)];
+    this.clicks = cues.flatMap((s) => [{ when: this.T0 + s - 2 * spb }, { when: this.T0 + s - spb, accent: true }]);
+    const pumpClicks = () => {
+      while (this.clicks.length && this.clicks[0].when < c.currentTime + 0.5) {
+        const k = this.clicks.shift();
+        if (k.when > c.currentTime) guide.click(k.when, k.accent);
+      }
+    };
+    pumpClicks();
+    const groups = planCurves(this.plan, sa).map((g) => ({ ...g, start: g.start + this.T0, end: g.end + this.T0 }));
+    guide.playCurves(groups);
+    const lat =mic.latencySec() + (c.outputLatency || 0) + (settings.latencyMs || 0) / 1000;
     this.off = mic.on((f) => {
       const t = c.currentTime - this.T0 - lat;
       this.frames.push({ t, c: f.hz > 0 ? centsOf(f.hz, sa) : NaN });
     });
+    // keep listening a little past the last sung line, so a late finish is still heard
+    const lastSung = Math.max(0, ...this.plan.segments.filter((s) => s.mode !== 'listen').map((s) => s.end));
+    const endAt = Math.max(this.plan.duration + 0.2, lastSung + 0.9 + lat);
     this.running = true;
     this.startBtn.replaceChildren(icon('stop', 14), 'Stop');
     this.startBtn.classList.remove('primary');
     this.hideFrom = this.blind ? 0 : Infinity;
     const loop = () => {
       if (!this.running) return;
+      pumpClicks();
       const t = c.currentTime - this.T0;
       this.lane.now = t;
       const seg = this.plan.segments.find((s) => t >= s.start - 0.3 && t < s.end + 0.3);
-      this.chip.textContent = t < 0 ? 'Get ready…' : seg ? (seg.mode === 'listen' ? 'Listen' : seg.mode === 'sing' ? 'Your turn' : 'Sing along') : '';
+      const ready = t < 0 || (!seg && this.plan.segments.some((s) => s.mode === 'sing' && t >= s.start - 2 * spb && t < s.start));
+      this.chip.textContent = ready ? 'Get ready…' : seg ? (seg.mode === 'listen' ? 'Listen' : seg.mode === 'sing' ? 'Your turn' : 'Sing along') : '';
       this.chip.className = 'phase-chip ' + (seg ? seg.mode : '');
       this.lane.hideUserFrom = this.blind ? -1e9 : Infinity;
       const last = this.frames[this.frames.length - 1];
@@ -211,7 +228,7 @@ export class ExercisePlayer {
       const cls = this.readout.update(last ? last.c : NaN, sa, ref);
       this.lane.live = last && !this.blind ? { c: last.c, color: cls ? getComputedStyle(this.root).getPropertyValue('--' + cls) : null } : null;
       this.lane.draw();
-      if (t > this.plan.duration + 0.2) { this.finish(); return; }
+      if (t > endAt) { this.finish(); return; }
       this.raf = requestAnimationFrame(loop);
     };
     this.raf = requestAnimationFrame(loop);
@@ -221,6 +238,7 @@ export class ExercisePlayer {
     if (!this.running) return;
     this.running = false;
     cancelAnimationFrame(this.raf);
+    this.clicks = [];
     guide.stopAll();
     if (this.off) this.off();
     if (this.duckedTanpura) tanpura.duck(false);
@@ -233,28 +251,34 @@ export class ExercisePlayer {
     this.stop(true);
     this.lane.hideUserFrom = Infinity; this.lane.live = null;
     const plan = this.plan;
+    // Judge pitch, not reaction time: each sung line is shifted by the singer's own steady
+    // offset before scoring. Timing is reported on its own and doesn't change the score.
+    const { frames, lags } = alignTake(plan, this.frames, { octaveFree: settings.octaveFree });
+    const timed = lags.filter((l) => l.ok);
+    const timing = timed.length ? { lag: timed.reduce((a, l) => a + l.lag, 0) / timed.length, mode: timed[0].seg.mode } : null;
     // show the whole exercise statically so the singer can review it
+    this.lane.user = frames;
     this.lane.past = 0; this.lane.future = plan.duration + 0.5; this.lane.now = -0.2;
     this.lane.draw();
     setTimeout(() => { this.lane.past = 2.5; this.lane.future = 4.5; }, 0);
     const scoredRef = (t) => { const s = plan.segments.find((x) => t >= x.start && t < x.end); return s && s.mode !== 'listen' ? planRefAt(plan, t) : NaN; };
-    const res = analyzeTake({ frames: this.frames, refAt: scoredRef, start: 0, end: plan.duration, tol: settings.tol, octaveFree: settings.octaveFree, tuning: settings.tuning });
+    const res = analyzeTake({ frames, refAt: scoredRef, start: 0, end: plan.duration, tol: settings.tol, octaveFree: settings.octaveFree, tuning: settings.tuning });
     // per-note view
     const notes = scoredNotes(plan).map((e) => {
       const a = e.t + Math.min(0.12, e.dur * 0.25), b = e.t + e.dur - 0.04;
-      const ds = this.frames.filter((f) => f.t >= a && f.t <= b && !isNaN(f.c)).map((f) => { const d = f.c - planRefAt(plan, f.t); return settings.octaveFree ? wrapCents(d) : d; });
+      const ds = frames.filter((f) => f.t >= a && f.t <= b && !isNaN(f.c)).map((f) => { const d = f.c - planRefAt(plan, f.t); return settings.octaveFree ? wrapCents(d) : d; });
       const cover = ds.length / Math.max(1, (b - a) * 60);
       const md = ds.length ? median(ds) : NaN;
       return { e, md, cover, ok: ds.length > 3 && Math.abs(md) <= settings.tol && cover > 0.3 };
     });
     const hit = notes.filter((n) => n.ok).length;
-    this.renderResult(res, notes, hit);
+    this.renderResult(res, notes, hit, timing);
     const minutes = (plan.duration + 2) / 60;
     logActivity({ type: 'drill', id: this.id, score: res.score, accuracy: res.accuracy, minutes, perSwara: res.perSwara, weak: res.weak });
     this.onDone && this.onDone(res);
   }
 
-  renderResult(res, notes, hit) {
+  renderResult(res, notes, hit, timing = null) {
     const r = this.result; r.innerHTML = '';
     const big = h('div', { class: 'score-big ' + (res.score >= 75 ? 'good' : res.score >= 50 ? 'ok' : 'bad'), style: `--p:${res.score}` }, String(res.score));
     const stats = h('div', { class: 'stats' },
@@ -272,6 +296,7 @@ export class ExercisePlayer {
     const bias = swaraBiasText(res.perSwara, 6);
     r.append(h('div', { class: 'result-top' }, big, stats), chips);
     if (bias.length) r.append(h('p', { class: 'muted small' }, 'Per-swara tendency: ' + describeSwaraBias(bias.slice(0, 4))));
+    if (timing && Math.abs(timing.lag) >= 0.12) r.append(h('p', { class: 'muted small' }, timingText(timing)));
     r.append(tipList(res.tips.filter((t) => !/lag|behind|ahead/.test(t.title))));
     r.append(h('div', { class: 'row' }, h('button', { class: 'btn', onclick: () => this.start() }, icon('loop', 15), 'Again'), this.onNext ? h('button', { class: 'btn primary', onclick: () => this.onNext() }, 'Next →') : null));
   }
@@ -339,6 +364,12 @@ function id2text(def, scale, textEl) {
     return parts.slice(0, half).join(' ') + ' || ' + parts.slice(half).join(' ');
   }
   return def.text;
+}
+// Average timing of the sung lines, said kindly (the score already allows for it).
+function timingText({ lag, mode }) {
+  const s = (Math.round(Math.abs(lag) * 10) / 10).toFixed(1) + ' s';
+  if (mode === 'sing') return `You came in about ${s} ${lag > 0 ? 'late' : 'early'} on average (the score allows for this). Come in one beat after the second click.`;
+  return `You were about ${s} ${lag > 0 ? 'behind' : 'ahead of'} the guide on average (the score allows for this).`;
 }
 const wait = (ms) => new Promise((r) => setTimeout(r, ms));
 function stat(label, val) { return h('div', { class: 'stat' }, h('div', { class: 'stat-v' }, val), h('div', { class: 'stat-l' }, label)); }

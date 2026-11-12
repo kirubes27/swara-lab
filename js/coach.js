@@ -300,3 +300,62 @@ export function fitToRange(p5Hz, p95Hz, lowMidi, highMidi) {
 export function describeSwaraBias(list, notation) {
   return list.map((x) => `${degreeText(x.idx, settings)} ${x.bias > 0 ? 'sharp' : 'flat'} by ${Math.round(Math.abs(x.bias))}¢`).join(' · ');
 }
+
+// ---------------------------------------------------------------------------
+// Note by note: how each held note of a line was sung.
+// tokens: [{t, dur, idx, oct, ...}] (e.g. from transcribe), frames: [{t, c}] in time order,
+// refAt(t) -> cents rel Sa or NaN. Returns the tokens plus {dev, cover, status}:
+// dev = median deviation (cents) over the note's steady middle, cover = share of that middle
+// the singer was heard, status = 'good' | 'ok' | 'bad' | 'miss'.
+export function noteResults(tokens, frames, refAt, { tol = 35, octaveFree = true } = {}) {
+  const hop = 0.01;
+  const fr = frames || [];
+  return (tokens || []).map((tk) => {
+    // skip the attack and the release: scoops and slides into the next note aren't the note
+    const a = tk.t + Math.min(0.08, 0.2 * tk.dur), b = tk.t + tk.dur - Math.min(0.05, 0.15 * tk.dur);
+    let voiced = 0;
+    for (const f of fr) { if (f.t > b) break; if (f.t >= a && !isNaN(f.c)) voiced++; }
+    const U = grid(fr, a, b, hop);
+    const nom = (tk.idx + 12 * tk.oct) * 100; // where the reference has a gap, use the note itself
+    const ds = [];
+    for (let i = 0; i < U.length; i++) {
+      if (isNaN(U[i])) continue;
+      let r = refAt(a + i * hop);
+      if (isNaN(r)) r = nom;
+      ds.push(devOf(U[i], r, octaveFree));
+    }
+    const cover = U.length ? ds.length / U.length : 0;
+    const dev = ds.length ? median(ds) : NaN;
+    const ad = Math.abs(dev);
+    const status = voiced < 3 || cover < 0.3 ? 'miss' : ad <= tol ? 'good' : ad <= 2.2 * tol ? 'ok' : 'bad';
+    return { ...tk, dev, cover, status };
+  });
+}
+
+// The stretch worth drilling on its own: the worst run of 1-3 consecutive notes, padded by one
+// neighbouring note each side (plus 0.12 s) so it is sung in context, and at least 1 s long.
+// notes: the output of noteResults. Returns {a, b, from, to, weight} or null when nothing stands
+// out (from/to: indices of the hard notes themselves, inclusive).
+export function hardestSpan(notes) {
+  if (!notes || !notes.length) return null;
+  const w = notes.map((n) => {
+    const d = Math.abs(n.dev);
+    const base = n.status === 'miss' ? 150 : n.status === 'bad' ? Math.min(200, isNaN(d) ? 200 : d) : n.status === 'ok' ? d / 2 : 0;
+    return (base || 0) * Math.min(1, n.dur / 0.25); // short notes matter less
+  });
+  let best = -1, from = -1, to = -1;
+  for (let len = 1; len <= 3; len++) {
+    for (let i = 0; i + len <= notes.length; i++) {
+      let sum = 0;
+      for (let k = i; k < i + len; k++) sum += w[k];
+      const s = sum / Math.sqrt(len);
+      if (s > best) { best = s; from = i; to = i + len - 1; }
+    }
+  }
+  if (best < 60) return null;
+  const first = notes[Math.max(0, from - 1)], last = notes[Math.min(notes.length - 1, to + 1)];
+  let a = first.t - 0.12, b = last.t + last.dur + 0.12;
+  if (b - a < 1) { const m = (a + b) / 2; a = m - 0.5; b = m + 0.5; }
+  if (a < 0) { b -= a; a = 0; }
+  return { a, b, from, to, weight: best };
+}

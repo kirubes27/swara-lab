@@ -44,6 +44,7 @@ const P = {
   keyboard: '<rect x="2.5" y="6" width="19" height="12" rx="2.5"/><path d="M6.5 10h.01M10 10h.01M14 10h.01M17.5 10h.01M7.5 14h9"/>',
   search: '<circle cx="11" cy="11" r="6.5"/><path d="m16 16 4.5 4.5"/>',
   device: '<rect x="3" y="4.5" width="18" height="12" rx="2"/><path d="M8.5 20h7M12 16.5V20"/>',
+  keys: '<rect x="3" y="4.5" width="18" height="15" rx="2.5"/><path d="M8.5 4.5v9M15.5 4.5v9M8.5 13.5v6M15.5 13.5v6M12 13.5v6"/><path d="M7 4.5h3v9H7zM14 4.5h3v9h-3z" fill="currentColor" stroke="none"/>',
   info: '<circle cx="12" cy="12" r="9"/><path d="M12 11v6M12 7.5v.5"/>',
 };
 

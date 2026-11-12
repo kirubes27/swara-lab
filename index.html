@@ -9,6 +9,8 @@
 <meta name="theme-color" content="#000000" media="(prefers-color-scheme: dark)">
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Ccircle cx='32' cy='32' r='30' fill='%23f39c3d'/%3E%3Cpath d='M10 38c8-14 14 6 22-8s14 4 22-6' stroke='%230f1115' stroke-width='5' fill='none' stroke-linecap='round'/%3E%3C/svg%3E">
 <link rel="stylesheet" href="css/style.css">
+<link rel="stylesheet" href="css/theory.css">
+<link rel="stylesheet" href="css/device.css">
 </head>
 <body>
 <header class="topbar">
@@ -17,6 +19,7 @@
     <a href="#today">Today</a>
     <a href="#songs">Songs</a>
     <a href="#practice">Practice</a>
+    <a href="#theory">Theory</a>
     <a href="#progress">Progress</a>
     <a href="#learn">Learn</a>
   </nav>
@@ -31,6 +34,7 @@
   <a href="#today"><span data-icon="home"></span>Today</a>
   <a href="#songs"><span data-icon="songs"></span>Songs</a>
   <a href="#practice"><span data-icon="practice"></span>Practice</a>
+  <a href="#theory"><span data-icon="keys"></span>Theory</a>
   <a href="#progress"><span data-icon="chart"></span>Progress</a>
   <a href="#learn"><span data-icon="book"></span>Learn</a>
 </nav>
@@ -38,6 +42,7 @@
   <section id="page-today" class="page"></section>
   <section id="page-song" class="page" hidden></section>
   <section id="page-practice" class="page" hidden></section>
+  <section id="page-theory" class="page" hidden></section>
   <section id="page-progress" class="page" hidden></section>
   <section id="page-settings" class="page" hidden></section>
   <section id="page-learn" class="page prose" hidden>
@@ -54,7 +59,7 @@
         <p>Seeing your pitch as a line against the target improves pitch accuracy in training studies. It works best with a simple display that shows the whole contour, not a score alone.</p>
         <p class="cite">Welch, Howard &amp; Rush (1989), <i>Psychology of Music</i> 17(2); Wilson, Lee, Callaghan &amp; Thorpe (2008), <i>J. Interdisciplinary Music Studies</i>.</p></div>
       <div class="card"><h3>…but don't lean on it forever</h3>
-        <p>In motor learning, constant feedback during practice can boost performance while hurting retention, because you come to depend on it (the "guidance hypothesis"). So alternate: learn with the line, then sing with the song muted or in Blind mode and check afterwards.</p>
+        <p>In motor learning, constant feedback during practice can boost performance while hurting retention, because you come to depend on it (the "guidance hypothesis"). So alternate: learn with the line, then sing from memory (Solo, or the Hidden line mode) and check afterwards. The line coach fades the help out step by step for exactly this reason.</p>
         <p class="cite">Salmoni, Schmidt &amp; Walter (1984), <i>Psychological Bulletin</i> 95(3).</p></div>
       <div class="card"><h3>Imitation is easier in your own range</h3>
         <p>Poor-pitch singers imitate recordings of <em>their own</em> voice more accurately than other voices. Copying a very different voice (a high tenor, a female singer, a playback singer) is extra hard. Transpose to your key, and listen back to your own takes.</p>
@@ -70,13 +75,13 @@
 
     <h2>How to learn any song</h2>
     <ol>
-      <li><strong>Build the melody guide</strong> in Song Studio. Check the detected key note (phrases usually come to rest on the bold line), and see whether the melody fits your range.</li>
+      <li><strong>Build the melody guide</strong> on the Songs page. Check the Key chip (phrases usually come to rest on the bold line) and the Range chip: a green dot means it fits your voice.</li>
       <li><strong>Pick your key.</strong> If lines go above your comfortable top, transpose down or sing an octave lower. Original keys suit the original singer, not you.</li>
-      <li><strong>Learn line by line.</strong> Click a line to loop it. First <em>listen</em> 3–4 times at 0.75× with the guide tone on, and watch the shape.</li>
+      <li><strong>Learn line by line.</strong> Press Learn on a line (or on any stretch you looped). The coach takes you through it: listen, sing slowly with the guide, sing with the singer, then from memory. It points at the exact notes that went off and lets you drill just the hard part.</li>
       <li><strong>Sing on "ah" first, words later.</strong> Get the melody and ornaments on a vowel, then add lyrics.</li>
-      <li><strong>Write out the notes.</strong> Each line shows its approximate notes. For a hard passage, type it into the <a href="#practice/custom">Note Pad</a> and drill it slowly over the drone.</li>
+      <li><strong>Read the notes.</strong> Each line shows its words and approximate notes. For a passage that needs extra work, type it into the <a href="#practice/custom">Note Pad</a> and drill it slowly over the drone.</li>
       <li><strong>Speed up in steps:</strong> 0.6× → 0.75× → 0.85× → 1×. Move on when you get two good takes in a row.</li>
-      <li><strong>Remove the crutches:</strong> switch to Song muted (guide tone only), then Blind mode, then sing with the original and listen back to your recording.</li>
+      <li><strong>Remove the crutches:</strong> sing in Solo (song muted, guide tone only), then with the Hidden line mode, then with the original, and listen back to your recording.</li>
     </ol>
 
     <h2>Fixes for common problems</h2>

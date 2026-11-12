@@ -408,11 +408,12 @@ function route() {
   let [page, sub, arg] = hash.split('/');
   if (page === 'drills' && sub) { location.replace('#practice/' + sub); return; }
   if (ALIAS[page]) { location.replace('#' + ALIAS[page]); return; }
-  const ROUTES = ['today', 'songs', 'practice', 'progress', 'learn', 'settings'];
+  const ROUTES = ['today', 'songs', 'practice', 'theory', 'progress', 'learn', 'settings'];
   if (!ROUTES.includes(page)) page = 'today';
   const pageId = page === 'songs' ? 'song' : page;
   if (current === 'song' && pageId !== 'song' && pages.song) pages.song.deactivate();
   if (current === 'practice' && pageId !== 'practice') for (const k of ['player', 'warm', 'free', 'range']) if (pages[k] && pages[k].stop) pages[k].stop();
+  if (current === 'theory' && pages.theory) pages.theory.stopTheory();
   current = pageId;
   document.querySelectorAll('.page').forEach((el) => (el.hidden = el.id !== 'page-' + pageId));
   document.querySelectorAll('.nav a, .tabbar a').forEach((a) => a.classList.toggle('active', a.getAttribute('href') === '#' + page));
@@ -423,6 +424,11 @@ function route() {
     if (!pages.song) pages.song = new SongStudio($('#page-song'));
     pages.song.activate(); pages.song.syncMicBtn();
     pages.song.route(sub, arg);
+  }
+  if (pageId === 'theory') {
+    const path = hash.split('/').slice(1).join('/');
+    import('./theory.js').then((m) => { pages.theory = m; if (current === 'theory') m.renderTheory($('#page-theory'), path); })
+      .catch((e) => { console.error(e); $('#page-theory').replaceChildren(h('p', { class: 'muted' }, 'The Theory pages couldn\'t load. Reload to try again.')); });
   }
   if (pageId === 'progress') renderProgress();
   if (pageId === 'settings') renderSettings(sub);

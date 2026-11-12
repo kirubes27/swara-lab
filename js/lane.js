@@ -38,6 +38,7 @@ export class PitchLane {
     this.theme = null;
     this.message = '';
     this.nearestColor = false;    // free singing: colour by distance to the nearest note
+    this.fixed = null;            // {t0, t1}: a static window; the playhead moves across it
     new ResizeObserver(() => { this.theme = null; }).observe(canvas);
     document.addEventListener('themechange', () => { this.theme = null; });
     matchMedia('(prefers-color-scheme: dark)').addEventListener?.('change', () => { this.theme = null; });
@@ -64,8 +65,10 @@ export class PitchLane {
     const T = this.theme, g = this.g, W = this.c.width, H = this.c.height;
     // ease range
     this.lo += (this.targetLo - this.lo) * 0.12; this.hi += (this.targetHi - this.hi) * 0.12;
-    const t0 = this.now - this.past, t1 = this.now + this.future;
-    const X = (t) => ((t - t0) / (t1 - t0)) * W;
+    const fx = this.fixed && this.fixed.t1 > this.fixed.t0 ? this.fixed : null;
+    const t0 = fx ? fx.t0 : this.now - this.past, t1 = fx ? fx.t1 : this.now + this.future;
+    const gx = fx ? 56 * dpr : 0; // a fixed window starts right of the note labels
+    const X = (t) => gx + ((t - t0) / (t1 - t0)) * (W - gx);
     const Y = (c) => this.y(c, H);
     g.fillStyle = T.bg; g.fillRect(0, 0, W, H);
     // regions

@@ -403,7 +403,7 @@ details.more[open] summary { margin-bottom: 12px; }
 
 /* coach mode: the line coach takes over the page */
 .coach-head[hidden], .coach-bar[hidden], .coach-out[hidden] { display: none; }
-.studio.coaching .studio-head, .studio.coaching .add-box, .studio.coaching .transport, .studio.coaching .lower, .studio.coaching canvas.overview { display: none; }
+.studio.coaching .studio-head, .studio.coaching .add-box, .studio.coaching .transport, .studio.coaching .lower, .studio.coaching canvas.overview, .studio.coaching .learn-pill { display: none !important; }
 
 /* popovers, menus, sheets */
 .pop { position: fixed; z-index: 70; min-width: 230px; max-width: min(340px, calc(100vw - 16px)); padding: 6px; border-radius: 14px; background: color-mix(in srgb, var(--surface) 94%, transparent); -webkit-backdrop-filter: blur(24px) saturate(180%); backdrop-filter: blur(24px) saturate(180%); box-shadow: var(--shadow-lg), 0 0 0 .5px var(--hair2); animation: popin .16s var(--ease); }
@@ -556,7 +556,7 @@ svg.trend .trend-dot { fill: var(--accent); stroke: var(--surface); stroke-width
 @media (max-width: 900px) {
   .topbar { grid-template-columns: 1fr auto; padding: 0 12px 0 16px; }
   .nav { display: none; }
-  .tabbar { display: grid; grid-template-columns: repeat(5, 1fr); position: fixed; left: 0; right: 0; bottom: 0; z-index: 30; padding: 6px 6px calc(6px + env(safe-area-inset-bottom)); background: var(--glass); backdrop-filter: saturate(180%) blur(20px); -webkit-backdrop-filter: saturate(180%) blur(20px); border-top: 1px solid var(--hair); }
+  .tabbar { display: grid; grid-template-columns: repeat(6, 1fr); position: fixed; left: 0; right: 0; bottom: 0; z-index: 30; padding: 6px 6px calc(6px + env(safe-area-inset-bottom)); background: var(--glass); backdrop-filter: saturate(180%) blur(20px); -webkit-backdrop-filter: saturate(180%) blur(20px); border-top: 1px solid var(--hair); }
   .tabbar a { display: flex; flex-direction: column; align-items: center; gap: 3px; padding: 4px 0; color: var(--text3); font-size: .66rem; font-weight: 550; letter-spacing: 0; }
   .tabbar a:hover { text-decoration: none; }
   .tabbar a.active { color: var(--accent); }
