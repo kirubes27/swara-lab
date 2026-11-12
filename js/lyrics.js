@@ -136,6 +136,72 @@ export function alignLyrics(lines, mel) {
   return { offset: Math.round(bd * 100) / 100, conf: bs };
 }
 
+// Line by line: each lyric line is matched, in order, to a place where the singing starts, letting
+// the tempo drift (a cover, a live take, an extra bar, an intro or an ad) while keeping the gaps
+// between lines roughly in proportion. Returns a song time for every non-empty line, or null.
+export function alignLines(lines, mel, off = 0) {
+  const L = lines.filter((l) => l.text).map((l) => l.t), n = L.length;
+  if (n < 4 || !mel) return null;
+  const c = mel.cents, gapN = Math.round(0.22 / mel.hop), O = [], G = [];
+  let silent = 1e9;
+  for (let i = 0; i < c.length; i++) {
+    if (isNaN(c[i])) { silent++; continue; }
+    if (silent >= gapN) { O.push(mel.t0 + i * mel.hop); G.push(Math.min(silent, 1e4) * mel.hop); }
+    silent = 0;
+  }
+  if (O.length < 4) return null;
+  const lb = (x) => { let lo = 0, hi = O.length; while (lo < hi) { const m = (lo + hi) >> 1; if (O[m] < x) lo = m + 1; else hi = m; } return lo; };
+  const W = 25, SKIP = 1, strength = (p) => Math.min(1, G[p] / 0.6); // a long pause before = likely a new line
+  const states = L.map((t, i) => {
+    const x = t + off, out = [];
+    for (let p = lb(x - W); p < lb(x + W); p++) out.push({ p, c: Infinity, from: null });
+    return out;
+  });
+  for (let i = 0; i < n; i++) for (const st of states[i]) {
+    st.c = i * SKIP + (0.5 * Math.abs(O[st.p] - (L[i] + off))) / W - strength(st.p); // first matched line
+    for (let k = 1; k <= 3 && i - k >= 0; k++) for (const pr of states[i - k]) {
+      if (!isFinite(pr.c) || O[pr.p] > O[st.p] - 0.3) continue;
+      const dl = Math.max(0.05, L[i] - L[i - k]), ds = O[st.p] - O[pr.p], ratio = ds / dl;
+      let step;
+      if (ratio > 0.7 && ratio < 1.45) step = 6 * Math.abs(Math.log(ratio));   // same section, tempo a little different
+      else if (ds - dl > 1 && ds - dl < 40) step = 2.5;                        // an extra bar, intro or break in this version
+      else continue;
+      const cost = pr.c + step + (k - 1) * SKIP - strength(st.p);
+      if (cost < st.c) { st.c = cost; st.from = { i: i - k, st: pr }; }
+    }
+  }
+  let end = null, endI = -1;
+  for (let i = Math.max(0, n - 3); i < n; i++) for (const st of states[i]) { const c2 = st.c + (n - 1 - i) * SKIP; if (!end || c2 < end.c2) { end = { st, c2 }; endI = i; } }
+  if (!end) return null;
+  const matched = new Map();
+  for (let cur = { i: endI, st: end.st }; cur; cur = cur.st.from) matched.set(cur.i, O[cur.st.p]);
+  if (matched.size < Math.max(4, n * 0.5)) return null; // too little agreement: keep the simple shift
+  const idx = [...matched.keys()].sort((a, b) => a - b), times = new Array(n);
+  for (let i = 0; i < n; i++) {
+    if (matched.has(i)) { times[i] = matched.get(i); continue; }
+    const a = idx.filter((k) => k < i).pop(), b = idx.find((k) => k > i);
+    if (a != null && b != null) times[i] = matched.get(a) + ((matched.get(b) - matched.get(a)) * (L[i] - L[a])) / (L[b] - L[a]);
+    else { const k = a != null ? a : b; times[i] = L[i] + (matched.get(k) - L[k]); }
+  }
+  return times.map((t) => Math.round(t * 100) / 100);
+}
+// How well a set of line times sits on vocal entries (0..1): the yardstick for picking a timing.
+export function timingFit(times, mel) {
+  const c = mel.cents, gapN = Math.round(0.22 / mel.hop), O = [], G = [];
+  let silent = 1e9;
+  for (let i = 0; i < c.length; i++) { if (isNaN(c[i])) { silent++; continue; } if (silent >= gapN) { O.push(mel.t0 + i * mel.hop); G.push(silent * mel.hop); } silent = 0; }
+  if (!O.length || !times.length) return 0;
+  let s = 0;
+  for (const t of times) {
+    let lo = 0, hi = O.length - 1;
+    while (lo < hi) { const m = (lo + hi) >> 1; if (O[m] < t) lo = m + 1; else hi = m; }
+    let best = 0;
+    for (const k of [lo - 1, lo]) if (k >= 0 && k < O.length) { const d = O[k] - t; best = Math.max(best, Math.exp(-(d * d) / (2 * 0.25 * 0.25)) * Math.min(1, G[k] / 0.6)); }
+    s += best;
+  }
+  return s / times.length;
+}
+
 // ---- panel ---------------------------------------------------------------------------------------
 export class LyricsPanel {
   // studio: the SongStudio (player time, melody, seeking)
@@ -144,20 +210,35 @@ export class LyricsPanel {
     el.classList.add('lyrics');
     this.render();
   }
-  get offset() { return (this.song && this.song.lyricsOffset) || 0; }
+  // Timing for the current source (the video and a recorded copy can have different timelines):
+  // { offset, times: [song time per non-empty line] | null, user: true when set by hand }
+  get timing() {
+    if (!this.song) return { offset: 0, times: null };
+    const all = (this.song.lyricsTiming = this.song.lyricsTiming || {});
+    return all[this.s.source] || (all[this.s.source] = { offset: 0, times: null, user: false });
+  }
+  setTiming(patch) { Object.assign(this.timing, patch); this.ver = (this.ver || 0) + 1; upsertSong(this.song); }
+  get offset() { return this.timing.offset || 0; }
   // Display lines in song time: [{t, end, text}] without the empty "break" lines.
   get lines() {
     if (this.state === 'tap') return this.tapLines;
     const d = this.data;
     if (!d || !d.lines) return null;
-    if (this._linesFor === d && this._offFor === this.offset) return this._lines;
-    const off = this.offset, src = d.lines, out = [];
+    const key = d.lines.length + ':' + this.s.source + ':' + (this.ver || 0);
+    if (this._linesFor === d && this._key === key) return this._lines;
+    const T = this.timing, src = d.lines, out = [];
+    let k = 0;
     for (let i = 0; i < src.length; i++) {
       if (!src[i].text) continue;
-      const next = src[i + 1] ? src[i + 1].t : src[i].t + 6;
-      out.push({ t: src[i].t + off, end: next + off, text: src[i].text });
+      const t = T.times && T.times.length > k ? T.times[k] : src[i].t + (T.offset || 0);
+      out.push({ t, end: Infinity, text: src[i].text, lrc: src[i].t, gapAfter: src[i + 1] && !src[i + 1].text ? src[i + 1].t - src[i].t : null });
+      k++;
     }
-    this._linesFor = d; this._offFor = off; this._lines = out;
+    for (let i = 0; i < out.length; i++) { // a line lasts until the next one, or until an instrumental break
+      const next = out[i + 1] ? out[i + 1].t : out[i].t + 6;
+      out[i].end = out[i].gapAfter != null ? Math.min(next, out[i].t + out[i].gapAfter) : next;
+    }
+    this._linesFor = d; this._key = key; this._lines = out;
     return out;
   }
   // Lyric text sung between two song times (for the list of lines and the coach).
@@ -174,7 +255,7 @@ export class LyricsPanel {
     const saved = await idbGet('melody', song.id + ':lyrics').catch(() => null);
     if (token !== this.token) return;
     if (saved) return this.use(saved, { save: false });
-    const placeholder = !song.title || (/^YouTube [\w-]{11}$/.test(song.title) && !song.titleFetched);
+    const placeholder = !song.title || song.untitled || (/^YouTube [\w-]{11}$/.test(song.title) && !song.titleFetched);
     if (!search || song.lyricsTried || placeholder) { this.state = 'none'; this.render(); return; }
     await this.autoSearch(token);
   }
@@ -193,32 +274,58 @@ export class LyricsPanel {
     }
   }
   use(d, { save = true } = {}) {
-    this.data = d; this.cur = -2;
+    this.data = d; this.cur = -2; this.removed = false; this.ver = (this.ver || 0) + 1;
     if (save) {
       idbPut('melody', this.song.id + ':lyrics', d);
-      this.song.lyricsOffset = 0; this.song.lyricsOffsetUser = false; upsertSong(this.song);
+      this.song.lyricsTiming = {}; upsertSong(this.song); // new lyrics: time them afresh for every source
     }
     this.state = d.synced ? 'synced' : (d.plain && d.plain.some(Boolean) ? 'plain' : 'none');
-    if (d.synced && save) this.realign();
+    if (d.synced) this.realign();
     this.render();
     this.s.onLyrics && this.s.onLyrics();
   }
   // Called when the melody guide appears or changes.
+  // Time the lyrics to this source's melody guide (once per source, unless set by hand).
   realign() {
-    const d = this.data, mel = this.s.mel;
-    if (!d || !d.synced || !mel || this.song.lyricsOffsetUser || d.source === 'tap') return;
-    const r = alignLyrics(d.lines, mel);
-    if (!r) return;
-    this.song.lyricsOffset = r.offset; upsertSong(this.song);
-    this._linesFor = null; this.cur = -2;
-    this.render();
+    const d = this.data, mel = this.s.mel, T = this.timing;
+    if (!d || !d.synced || !mel || T.user || T.auto || d.source === 'tap') return;
+    const r = alignLyrics(d.lines, mel), off = r ? r.offset : 0;
+    let times = alignLines(d.lines, mel, off);
+    if (times) { // keep the simple shift unless line-by-line timing clearly sits better on the singing
+      const shifted = d.lines.filter((l) => l.text).map((l) => l.t + off);
+      if (timingFit(times, mel) < timingFit(shifted, mel) + 0.08) times = null;
+    }
+    this.setTiming({ offset: off, times, auto: true });
+    this.cur = -2; this.render();
+    this.s.onLyrics && this.s.onLyrics();
+  }
+  // The melody guide was rebuilt: time the lyrics again (unless they were set by hand).
+  invalidate(source = this.s.source) {
+    const T = this.song && this.song.lyricsTiming && this.song.lyricsTiming[source];
+    if (T && !T.user) { delete this.song.lyricsTiming[source]; this.ver = (this.ver || 0) + 1; upsertSong(this.song); }
+  }
+  shiftAll(dt, from = 0) {
+    const L = this.lines; if (!L) return;
+    const times = L.map((l, i) => (i >= from ? l.t + dt : l.t));
+    for (let k = from - 1; k >= 0; k--) { // earlier lines must still come before it
+      const gap = Math.max(0.5, (L[k + 1].lrc ?? L[k + 1].t) - (L[k].lrc ?? L[k].t));
+      if (times[k] > times[k + 1] - 0.3) times[k] = times[k + 1] - gap; else break;
+    }
+    this.setTiming({ times: times.map((t) => Math.round(t * 100) / 100), user: true });
+    this.cur = -2; this.tick(this.s.player ? this.s.player.time() : 0, true);
     this.s.onLyrics && this.s.onLyrics();
   }
   nudge(d) {
-    this.song.lyricsOffset = Math.round((this.offset + d) * 100) / 100; this.song.lyricsOffsetUser = true; upsertSong(this.song);
-    this._linesFor = null; this.cur = -2; this.tick(this.s.player ? this.s.player.time() : 0, true);
-    toast(`Lyrics ${d < 0 ? 'earlier' : 'later'} · ${this.offset > 0 ? '+' : ''}${this.offset.toFixed(2)} s`, 'info', 1800);
-    this.s.onLyrics && this.s.onLyrics();
+    this.shiftAll(d);
+    toast(`Lyrics ${d < 0 ? 'earlier' : 'later'} by ${Math.abs(d)} s`, 'info', 1600);
+  }
+  // "This is the line being sung now": everything from that line on moves to match.
+  adjustTo(i) {
+    const L = this.lines; if (!L || !L[i] || !this.s.player) return;
+    const now = this.s.player.time() - 0.25; // allow for reaction time
+    this.shiftAll(now - L[i].t, i);
+    this.picking = false; this.render();
+    toast('Lyrics lined up from that line on.', 'good', 2200);
   }
 
   // ---- per-frame update ----
@@ -229,7 +336,7 @@ export class LyricsPanel {
     if (this.state === 'tap') i = this.tapI;
     else {
       let lo = 0, hi = L.length - 1;
-      while (lo <= hi) { const m = (lo + hi) >> 1; if (L[m].t <= t + 0.15) { i = m; lo = m + 1; } else hi = m - 1; }
+      while (lo <= hi) { const m = (lo + hi) >> 1; if (L[m].t <= t + 0.45) { i = m; lo = m + 1; } else hi = m - 1; }
       if (i >= 0 && t > L[i].end + 0.3) i = -1; // an instrumental break after the line
     }
     if (i === this.cur && !force) return;
@@ -252,17 +359,23 @@ export class LyricsPanel {
     const el = this.el; el.innerHTML = '';
     this.body = null;
     el.classList.toggle('tapping', this.state === 'tap');
+    el.classList.toggle('picking', !!this.picking && this.state === 'synced');
+    el.hidden = this.state === 'idle';
     if (this.state === 'idle') return;
     const head = h('div', { class: 'ly-head' }, h('span', { class: 'ly-label' }, 'Lyrics'));
     const more = h('button', { class: 'icon-btn sm', 'aria-label': 'Lyrics options', title: 'Lyrics options', onclick: (e) => this.openMenu(e.currentTarget) }, icon('more', 18));
     if (this.state === 'plain') head.append(h('button', { class: 'btn small soft', title: 'Play the song and tap as each line starts', onclick: () => this.startTap() }, 'Sync'));
+    if (this.state === 'synced') {
+      if (this.picking) head.append(h('span', { class: 'ly-hint' }, 'Tap the line being sung now'));
+      head.append(h('button', { class: 'btn small soft' + (this.picking ? ' on' : ''), title: 'Lyrics out of step? Tap this, then tap the line you hear right now', 'aria-pressed': String(!!this.picking), onclick: () => { this.picking = !this.picking; this.render(); } }, this.picking ? 'Cancel' : 'Adjust'));
+    }
     if (this.state === 'tap') head.append(h('span', { class: 'ly-hint' }, 'Tap as each line starts'));
     head.append(more);
     el.append(head);
     if (this.state === 'loading') { el.append(h('div', { class: 'ly-skel' }, h('i'), h('i'), h('i'), h('i'))); return; }
     if (this.state === 'none' || this.state === 'error') {
       el.append(h('div', { class: 'ly-empty' },
-        h('p', {}, this.state === 'error' ? 'Couldn\'t reach the lyrics library.' : 'No lyrics found.'),
+        h('p', {}, this.state === 'error' ? 'Couldn\'t reach the lyrics library.' : this.removed ? 'Lyrics removed.' : this.song && this.song.untitled ? 'Name the song to look up its lyrics, or paste them.' : 'No lyrics found.'),
         h('div', { class: 'row center' },
           h('button', { class: 'btn small', onclick: () => this.openSearch() }, icon('search', 14), 'Search'),
           h('button', { class: 'btn small', onclick: () => this.openPaste() }, 'Paste'))));
@@ -279,7 +392,8 @@ export class LyricsPanel {
         class: 'ly-line', title: fmtTime(l.t),
         onclick: () => {
           if (this.state === 'tap') return;
-          this.userScroll = 0; this.s.seekTo(Math.max(0, l.t - 0.4));
+          if (this.picking) { this.adjustTo(k); return; }
+          this.userScroll = 0; this.s.seekTo(Math.max(0, l.t - 0.3));
         },
       }, l.text)));
     }
@@ -288,6 +402,7 @@ export class LyricsPanel {
       el.append(h('div', { class: 'ly-tapbar' },
         h('button', { class: 'btn small', onclick: () => this.tapUndo() }, 'Undo'),
         h('button', { class: 'btn small primary', onclick: () => this.tap() }, 'Tap', h('kbd', {}, 'Space')),
+        h('button', { class: 'btn small ghost', title: 'Keep the lines tapped so far', onclick: () => this.endTap(true) }, 'Done'),
         h('button', { class: 'btn small ghost', onclick: () => this.endTap(false) }, 'Cancel')));
     }
     this.cur = -2;
@@ -299,8 +414,10 @@ export class LyricsPanel {
     const src = d ? (d.source === 'lrclib' ? `${d.track} · ${d.artist} (LRCLIB)` : d.source === 'tap' ? 'Synced by you' : 'Pasted') : null;
     menu(anchor, [
       src ? { head: src } : null,
-      this.state === 'synced' ? { label: 'Earlier', sub: 'Lyrics show up sooner', icon: 'prev', keepOpen: true, onclick: () => this.nudge(-0.25) } : null,
-      this.state === 'synced' ? { label: 'Later', sub: 'Lyrics show up later', icon: 'next', keepOpen: true, onclick: () => this.nudge(0.25) } : null,
+      this.state === 'synced' ? { label: 'Line up with what I hear', sub: 'Then tap the line being sung now', icon: 'target', onclick: () => { this.picking = true; this.render(); } } : null,
+      this.state === 'synced' ? { label: 'Earlier', sub: 'All lines show up sooner', icon: 'prev', keepOpen: true, onclick: () => this.nudge(-0.25) } : null,
+      this.state === 'synced' ? { label: 'Later', sub: 'All lines show up later', icon: 'next', keepOpen: true, onclick: () => this.nudge(0.25) } : null,
+      this.state === 'synced' && this.timing.user && d.source !== 'tap' ? { label: 'Time automatically again', sub: 'Undo your adjustments', icon: 'sparkle', onclick: () => { this.song.lyricsTiming = {}; upsertSong(this.song); this.ver = (this.ver || 0) + 1; this.realign(); } } : null,
       this.state === 'synced' ? 'sep' : null,
       { label: 'Find other lyrics…', icon: 'search', onclick: () => this.openSearch() },
       { label: 'Paste lyrics…', icon: 'edit', onclick: () => this.openPaste() },
@@ -311,8 +428,8 @@ export class LyricsPanel {
   }
   async clear() {
     await idbDel('melody', this.song.id + ':lyrics');
-    this.data = null; this.song.lyricsTried = true; this.song.lyricsOffset = 0; this.song.lyricsOffsetUser = false; upsertSong(this.song);
-    this.state = 'none'; this.render(); this.s.onLyrics && this.s.onLyrics();
+    this.data = null; this.song.lyricsTried = true; this.song.lyricsTiming = {}; upsertSong(this.song);
+    this.removed = true; this.state = 'none'; this.render(); this.s.onLyrics && this.s.onLyrics();
   }
 
   openSearch() {
@@ -360,6 +477,7 @@ export class LyricsPanel {
     const text = this.data.plain.filter(Boolean);
     if (!text.length) return;
     this.tapLines = text.map((t) => ({ t: NaN, end: NaN, text: t }));
+    this.tapPrev = this.state; this.picking = false;
     this.tapI = 0; this.state = 'tap'; this.render();
     toast('Play the song and press Space (or Tap) as each line starts.', 'info', 5000);
   }
@@ -372,15 +490,18 @@ export class LyricsPanel {
     this.tick(t, true);
   }
   tapUndo() { if (this.tapI > 0) { this.tapI--; this.tapLines[this.tapI].t = NaN; this.s.seekTo(Math.max(0, (this.tapLines[this.tapI - 1] || { t: 0 }).t || 0)); this.tick(0, true); } }
+  // done: keep what was tapped (all lines, or the first ones when finishing early); otherwise discard.
   endTap(done) {
     const got = (this.tapLines || []).filter((l) => !isNaN(l.t));
-    if (done || got.length >= 4) {
-      const d = { source: 'tap', synced: true, lines: got.map((l) => ({ t: l.t, text: l.text })), plain: this.data.plain };
-      this.song.lyricsOffset = 0; this.song.lyricsOffsetUser = true; upsertSong(this.song);
+    const prev = this.tapPrev || 'plain';
+    if (done && got.length >= 2) {
+      const rest = this.tapLines.slice(got.length).map((l) => l.text); // untapped lines stay as text
+      const d = { source: 'tap', synced: true, lines: got.map((l) => ({ t: l.t, text: l.text })), plain: got.map((l) => l.text).concat(rest) };
+      this.song.lyricsTiming = { [this.s.source]: { offset: 0, times: null, user: true } }; upsertSong(this.song);
       idbPut('melody', this.song.id + ':lyrics', d);
-      this.data = d; this._linesFor = null; this.state = 'synced';
-      toast('Lyrics synced.', 'good');
-    } else this.state = 'plain';
+      this.data = d; this._linesFor = null; this.ver = (this.ver || 0) + 1; this.state = 'synced';
+      toast(rest.length ? `Synced ${got.length} lines.` : 'Lyrics synced.', 'good');
+    } else this.state = prev;
     this.tapLines = null; this.render(); this.s.onLyrics && this.s.onLyrics();
   }
 }

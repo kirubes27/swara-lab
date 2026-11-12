@@ -16,7 +16,7 @@ export const DEFAULT_SETTINGS = {
   tanpuraFirst: 'P',
   tanpuraVol: 0.35,
   guideVol: 0.6,
-  guideTimbre: 'reed',
+  guideTimbre: 'soft',
   micSens: 0.55,
   latencyMs: 0,         // extra user calibration
   rangeLowMidi: null,
@@ -34,9 +34,13 @@ if ((settings.styleVersion || 0) === 2) { // v3: quality levels renamed ('best' 
   settings.styleVersion = 3; lsSet('settings', settings);
 }
 if (!settings.styleVersion) { // v2: general style became the default (Indian style is opt-in)
-  settings.notation = 'western'; settings.styleVersion = 3;
+  settings.notation = 'western'; settings.styleVersion = 4;
   if (settings.thaat) delete settings.thaat;
   lsSet('settings', settings);
+}
+if (settings.styleVersion === 3) { // v4: a softer default guide tone
+  if (settings.guideTimbre === 'reed') settings.guideTimbre = 'soft';
+  settings.styleVersion = 4; lsSet('settings', settings);
 }
 const listeners = new Set();
 export function saveSettings(patch = {}) {

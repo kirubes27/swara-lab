@@ -1,6 +1,5 @@
 // Exercise player (warm-ups & drills), breath trainer and the live pitch readout.
-import { audioCtx } from './audio.js';
-import { mic } from './audio.js';
+import { audioCtx, mic, pushFrame } from './audio.js';
 import { tanpura, guide } from './sound.js';
 import { PitchLane } from './lane.js';
 import { EXERCISES, exText, parseSargam, makePlan, planRefAt, planCurves, scoredNotes, pitchMatchLines, alignTake } from './exercises.js';
@@ -107,7 +106,7 @@ export class ExercisePlayer {
     const items = [this.startBtn];
     if (def.kind !== 'match') items.push(h('label', { class: 'ctl', title: 'Listen first, then sing it back' }, echo, ' Listen → sing'));
     items.push(h('label', { class: 'ctl' }, 'Tempo ', tempo, ' ', bpmOut));
-    items.push(h('label', { class: 'ctl', title: 'Hide your pitch line while singing; see it afterwards. Builds independence from the screen.' }, blind, ' Hidden line'));
+    items.push(h('label', { class: 'ctl', title: 'Hide your pitch line while singing; see it afterwards. Builds independence from the screen.' }, blind, ' Hide my line'));
     if (def.thaatText || def.kind === 'match' || id === 'custom') {
       this.scaleKey = SCALES[settings.scale] ? settings.scale : 'major';
       const sel = h('select', { onchange: (e) => { this.scaleKey = e.target.value; this.preview(); } }, ...scaleList(settings).map((k) => h('option', { value: k, selected: k === this.scaleKey }, scaleLabel(k, settings))));
@@ -204,7 +203,7 @@ export class ExercisePlayer {
     const lat = mic.latencySec() + (c.outputLatency || 0.02) + (settings.latencyMs || 0) / 1000; // same terms as the Songs page and the delay measurement
     this.off = mic.on((f) => {
       const t = c.currentTime - this.T0 - lat;
-      this.frames.push({ t, c: f.hz > 0 ? centsOf(f.hz, sa) : NaN });
+      pushFrame(this.frames, { t, c: f.hz > 0 ? centsOf(f.hz, sa) : NaN });
     });
     // keep listening a little past the last sung line, so a late finish is still heard
     const lastSung = Math.max(0, ...this.plan.segments.filter((s) => s.mode !== 'listen').map((s) => s.end));
@@ -222,6 +221,9 @@ export class ExercisePlayer {
       const ready = t < 0 || (!seg && this.plan.segments.some((s) => s.mode === 'sing' && t >= s.start - 2 * spb && t < s.start));
       this.chip.textContent = ready ? 'Get ready…' : seg ? (seg.mode === 'listen' ? 'Listen' : seg.mode === 'sing' ? 'Your turn' : 'Sing along') : '';
       this.chip.className = 'phase-chip ' + (seg ? seg.mode : '');
+      // with speakers, the drone sits on the very note you sing and echo cancellation removes both: keep it soft while you sing
+      const singing = !!(seg && seg.mode !== 'listen' && t >= seg.start - 0.1);
+      if (!settings.headphones && tanpura.on && !this.duckedTanpura && singing !== this.softDrone) { this.softDrone = singing; tanpura.duck(singing, 0.3); }
       this.lane.hideUserFrom = this.blind ? -1e9 : Infinity;
       const last = this.frames[this.frames.length - 1];
       const ref = planRefAt(this.plan, t);
@@ -240,6 +242,7 @@ export class ExercisePlayer {
     cancelAnimationFrame(this.raf);
     this.clicks = [];
     guide.stopAll();
+    if (this.softDrone) { this.softDrone = false; tanpura.duck(false); }
     if (this.off) this.off();
     if (this.duckedTanpura) tanpura.duck(false);
     if (this.startBtn) { this.startBtn.replaceChildren(icon('play', 16), 'Start'); this.startBtn.classList.add('primary'); }

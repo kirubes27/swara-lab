@@ -24,11 +24,29 @@ function devOf(u, r, octaveFree) { const d = u - r; return octaveFree ? wrapCent
 
 // Core analysis shared by songs and exercises.
 // refAt(t) -> cents rel Sa or NaN. frames: user [{t, c}] (cents rel Sa).
-export function analyzeTake({ frames, refAt, start, end, tol = 35, octaveFree = true, tuning = 'et', rangeHi = null, rangeLo = null }) {
+// forgiveLag: judge pitch after removing a steady timing offset (the offset is still reported as res.lag).
+export function analyzeTake({ frames, refAt, start, end, tol = 35, octaveFree = true, tuning = 'et', rangeHi = null, rangeLo = null, forgiveLag = false }) {
   const hop = 0.01;
   const n = Math.max(0, Math.floor((end - start) / hop));
-  const R = new Float32Array(n), U = grid(frames, start, end, hop);
+  const R = new Float32Array(n);
+  let U = grid(frames, start, end, hop);
   for (let i = 0; i < n; i++) R[i] = refAt(start + i * hop);
+  // timing lag: which shift of the user line best matches the reference?
+  let bestLag = 0, bestErr = Infinity, zeroErr = Infinity;
+  for (let lagF = -40; lagF <= 40; lagF += 2) {
+    let e = 0, m = 0;
+    for (let i = 0; i < n; i += 2) {
+      const j = i + lagF; if (j < 0 || j >= n) continue;
+      if (isNaN(R[i]) || isNaN(U[j])) continue;
+      e += Math.min(300, Math.abs(devOf(U[j], R[i], octaveFree))); m++;
+    }
+    if (m < 50) continue;
+    e /= m;
+    if (lagF === 0) zeroErr = e;
+    if (e < bestErr) { bestErr = e; bestLag = lagF * hop; }
+  }
+  const lag = bestErr < zeroErr * 0.85 ? bestLag : 0;
+  if (forgiveLag && Math.abs(lag) >= 0.06) U = grid(frames.map((f) => ({ t: f.t - lag, c: f.c })), start, end, hop);
   let refV = 0, both = 0, inTol = 0, userV = 0;
   const devs = [], absDevs = [];
   const perSwara = {};
@@ -80,20 +98,6 @@ export function analyzeTake({ frames, refAt, start, end, tol = 35, octaveFree = 
       }
     }
   }
-  // timing lag: which shift of the user line best matches the reference?
-  let bestLag = 0, bestErr = Infinity, zeroErr = Infinity;
-  for (let lagF = -40; lagF <= 40; lagF += 2) {
-    let e = 0, m = 0;
-    for (let i = 0; i < n; i += 2) {
-      const j = i + lagF; if (j < 0 || j >= n) continue;
-      if (isNaN(R[i]) || isNaN(U[j])) continue;
-      e += Math.min(300, Math.abs(devOf(U[j], R[i], octaveFree))); m++;
-    }
-    if (m < 50) continue;
-    e /= m;
-    if (lagF === 0) zeroErr = e;
-    if (e < bestErr) { bestErr = e; bestLag = lagF * hop; }
-  }
   // scooping: user starts well below at note onsets
   let scoopN = 0, onsets = 0;
   for (let i = 1; i < n - 20; i++) {
@@ -119,7 +123,7 @@ export function analyzeTake({ frames, refAt, start, end, tol = 35, octaveFree = 
     loBias: loDev.length > 20 ? median(loDev) : null,
     wobble: stableN ? median(wobbleArr) : null,
     ornRatio: ornN > 8 ? ornRatio / ornN : null,
-    lag: bestErr < zeroErr * 0.85 ? bestLag : 0,
+    lag,
     scoop: onsets >= 3 ? scoopN / onsets : 0,
     perSwara, refVoicedSec: refV * hop, userVoicedSec: userV * hop,
     refHi: refVals.length ? percentile(refVals, 0.95) : null,
@@ -154,17 +158,18 @@ export function swaraBiasText(perSwara, minN = 8) {
 
 function tipsFor(r, { tol, rangeHi }) {
   const tips = [];
-  const c = (x) => `${x > 0 ? '+' : ''}${Math.round(x)}¢`;
+  const c = (x) => `${x > 0 ? '+' : x < 0 ? '−' : ''}${Math.abs(Math.round(x))}¢`;
+  const highFlat = r.hiBias != null && r.hiBias < -25 && r.hiBias - r.bias < -20; // the high notes are flatter than the rest
   if (r.refVoicedSec < 0.8) return [{ title: 'Not enough melody here', detail: 'This stretch has very little sung melody. Pick a phrase that contains singing.', level: 'info' }];
   if (r.coverage < 0.45) tips.push({ title: 'Sing through the whole line', level: 'high',
     detail: `You sang about ${Math.round(r.coverage * 100)}% of the melody. Learn the words and tune separately first: play the line at 0.75× with the guide tone on, hum along, then add the words.`, drill: null });
-  if (r.hiBias != null && r.hiBias < -25) tips.push({ title: `High notes are flat (${c(r.hiBias)})`, level: 'high', drill: 'fiveNote',
+  if (highFlat) tips.push({ title: `High notes are flat (${c(r.hiBias)})`, level: 'high', drill: 'fiveNote',
     detail: 'On the highest notes of this line you fall short of the pitch. Common causes: not enough breath support, or reaching up with the throat and jaw. Try the line on a lip trill or "ng" hum first, keep the jaw loose, and think of the high note as forward and light, not up and loud. If it still strains, transpose down 1–2 semitones and work back up over the weeks.' });
   if (rangeHi != null && r.refHi != null && r.refHi > rangeHi + 50) tips.push({ title: 'This line goes above your comfortable top', level: 'high',
     detail: 'The reference peaks above the highest comfortable note from your range test. Pushing up there is how voices get strained. Use transpose, or sing those notes an octave lower for now.' });
   if (r.loBias != null && r.loBias > 30) tips.push({ title: `Low notes drift sharp (${c(r.loBias)})`, level: 'mid',
     detail: 'Low notes need a relaxed, open throat. Let the larynx sit low, sing softer, and don\'t press. Long tones in your lower range help.', drill: 'saHold' });
-  if (Math.abs(r.bias) > 20 && !(r.hiBias != null && r.hiBias < -25 && r.bias < 0)) tips.push({ title: r.bias < 0 ? `Overall slightly flat (${c(r.bias)})` : `Overall slightly sharp (${c(r.bias)})`, level: 'mid', drill: 'saHold',
+  if (Math.abs(r.bias) > 20 && !(highFlat && r.bias < 0)) tips.push({ title: `${Math.abs(r.bias) > 40 ? 'Overall' : 'Overall slightly'} ${r.bias < 0 ? 'flat' : 'sharp'} (${c(r.bias)})`, level: 'mid', drill: 'saHold',
     detail: r.bias < 0 ? 'Across the line you sit a little under the pitch. Keep the drone on and listen for the key note. Flatness often comes from low energy or a tired voice, so give the line a little more breath and a brighter vowel ("aa" towards "eh").' : 'You tend to overshoot. This is usually tension or pushing. Sing a little softer and keep the shoulders and jaw relaxed.' });
   if (r.wobble != null && r.wobble > 22) tips.push({ title: 'Held notes are unsteady', level: 'mid', drill: 'saHold',
     detail: `Your pitch wavers by about ±${Math.round(r.wobble)}¢ on notes that should be steady. Practise long tones over the drone with a slow, steady exhale. Steadiness comes from breath control, not from the throat.` });
@@ -177,7 +182,9 @@ function tipsFor(r, { tol, rangeHi }) {
   if (Math.abs(r.lag) >= 0.08) tips.push({ title: r.lag > 0 ? `You're about ${Math.round(r.lag * 1000)} ms behind` : `You're about ${Math.round(-r.lag * 1000)} ms ahead`, level: 'low',
     detail: r.lag > 0 ? 'Either you are following the singer instead of singing with them (learn the line until you can anticipate it), or your headphones add delay. Bluetooth headphones often add 150–250 ms. If it\'s always the same, set the latency in Settings.' : 'You rush ahead of the beat. Listen for the rhythm of the words.' });
   if (r.accuracy >= 0.8 && r.coverage >= 0.75) tips.unshift({ title: 'Solid take', level: 'good',
-    detail: 'Over 80% in tune. Next step: try "Song muted" mode, or the Blind mode (no live line) so you rely on your ear instead of the screen.' });
+    detail: 'Over 80% in tune. Next step: try Guide only, then Test yourself, so you rely on your ear instead of the screen.' });
+  // in tune but steadily off the beat: timing is the thing to work on, so say it first
+  if (Math.abs(r.lag) >= 0.15 && r.accuracy >= 0.6) { const k = tips.findIndex((t) => /behind|ahead/.test(t.title)); if (k > 0) tips.unshift(tips.splice(k, 1)[0]); }
   if (!tips.length) tips.push({ title: 'Keep looping this phrase', level: 'info', detail: 'Repeat the phrase until you get two good takes in a row, then move on. Short, focused repetitions beat long run-throughs.' });
   return tips;
 }

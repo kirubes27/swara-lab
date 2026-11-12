@@ -1,5 +1,5 @@
 // Free sing: an open pitch monitor. Sing anything and see every note, slide and wobble.
-import { mic } from './audio.js';
+import { mic, pushFrame } from './audio.js';
 import { PitchLane } from './lane.js';
 import { settings, logActivity } from './store.js';
 import { saHzFrom, noteText, nearestSwara, westernName, hzToMidi, median, isIndian } from './music.js';
@@ -58,7 +58,7 @@ export class FreeSing {
     this.off = mic.on((f) => {
       const t = f.t / 1000;
       const c = f.hz > 0 ? 1200 * Math.log2(f.hz / sa()) : NaN;
-      this.frames.push({ t, c });
+      pushFrame(this.frames, { t, c });
       if (this.frames.length > 6000) this.frames.splice(0, 2000);
       this.track(t, c);
     });

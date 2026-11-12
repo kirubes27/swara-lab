@@ -1,5 +1,6 @@
 // Sound sources: tanpura drone, guide-tone synth (harmonium-like), follower tone, clicks.
 import { audioCtx, masterOut } from './audio.js';
+import { settings } from './store.js';
 
 // ---------------------------------------------------------------------------
 // Tanpura: additive synthesis with a moving "jawari" formant that sweeps down the
@@ -124,13 +125,23 @@ export class Tanpura {
     this.src = null; this.on = false; this.key = '';
   }
   setVolume(v) { this.vol = v; if (this.gain) this.gain.gain.setTargetAtTime(v, audioCtx().currentTime, 0.05); }
-  duck(on) { if (this.gain) this.gain.gain.setTargetAtTime(on ? 0 : this.vol, audioCtx().currentTime, 0.05); }
+  duck(on, level = 0) { if (this.gain) this.gain.gain.setTargetAtTime(on ? this.vol * level : this.vol, audioCtx().currentTime, 0.05); }
 }
 export const tanpura = new Tanpura();
 
 // ---------------------------------------------------------------------------
 // Guide tone: harmonium-ish reed timbre.
 let wave = null;
+// Soft guide tone: a strong fundamental with a gentle octave and twelfth (like a flute or a soft
+// organ stop). The low harmonics keep it audible on laptop speakers, which barely play low notes.
+let softW = null;
+function softWave(c) {
+  if (softW) return softW;
+  const amps = [0, 1, 0.55, 0.28, 0.12, 0.05, 0.02], re = new Float32Array(amps.length), im = Float32Array.from(amps);
+  softW = c.createPeriodicWave(re, im);
+  return softW;
+}
+export function guideWave(c, timbre) { return timbre === 'reed' ? reedWave(c) : timbre === 'sine' ? null : softWave(c); }
 function reedWave(c) {
   if (wave) return wave;
   const n = 24, re = new Float32Array(n), im = new Float32Array(n);
@@ -144,8 +155,9 @@ export class GuideSynth {
   constructor() { this.vol = 0.5; this.timbre = 'reed'; this.active = new Set(); }
   _voice(c) {
     const o = c.createOscillator();
-    if (this.timbre === 'sine') o.type = 'sine'; else o.setPeriodicWave(reedWave(c));
-    const lp = c.createBiquadFilter(); lp.type = 'lowpass'; lp.frequency.value = 2600; lp.Q.value = 0.5;
+    const w = guideWave(c, this.timbre);
+    if (w) o.setPeriodicWave(w); else o.type = 'sine';
+    const lp = c.createBiquadFilter(); lp.type = 'lowpass'; lp.frequency.value = this.timbre === 'reed' ? 2600 : 1800; lp.Q.value = 0.5;
     const g = c.createGain(); g.gain.value = 0;
     o.connect(lp); lp.connect(g); g.connect(masterOut());
     return { o, g };
@@ -194,16 +206,16 @@ export class Follower {
   set(hz) {
     const c = audioCtx();
     if (!this.v) {
-      const o = c.createOscillator(); o.setPeriodicWave(reedWave(c));
-      const lp = c.createBiquadFilter(); lp.type = 'lowpass'; lp.frequency.value = 2200;
+      const o = c.createOscillator(); const w = guideWave(c, this.timbre || settings.guideTimbre); if (w) o.setPeriodicWave(w); else o.type = 'sine';
+      const lp = c.createBiquadFilter(); lp.type = 'lowpass'; lp.frequency.value = (this.timbre || settings.guideTimbre) === 'reed' ? 2200 : 1700;
       const g = c.createGain(); g.gain.value = 0;
       o.connect(lp); lp.connect(g); g.connect(masterOut()); o.start();
       this.v = { o, g };
     }
     const t = c.currentTime;
     if (hz > 0) {
-      this.v.o.frequency.setTargetAtTime(hz, t, 0.012);
-      this.v.g.gain.setTargetAtTime(this.vol * 0.4, t, 0.03);
+      this.v.o.frequency.setTargetAtTime(hz, t, 0.006);
+      this.v.g.gain.setTargetAtTime(this.vol * 0.6, t, 0.03);
     } else this.v.g.gain.setTargetAtTime(0, t, 0.04);
   }
   stop() {

@@ -101,7 +101,7 @@ const TIPS = [
   ['Sing in your key.', 'If a line strains, transpose it down. Original keys suit the original singer, not you.'],
   ['Slow is fast.', 'Loop a hard line at 0.6× until it\'s clean, then speed up in steps.'],
   ['Listen back.', 'Your take is saved after every pass. People hear their own singing more accurately on playback than while singing.'],
-  ['Wean off the line.', 'Once a line is green, try Blind mode so your ear does the work.'],
+  ['Wean off the line.', 'Once a line is green, try Test yourself so your ear does the work.'],
   ['Lighter goes higher.', 'High notes get easier with less volume, not more.'],
   ['Breathe low.', 'Belly and lower ribs expand; shoulders stay still.'],
   ['Hum first.', 'Humming or lip trills before singing make the voice work with less effort.'],
@@ -194,7 +194,7 @@ function renderPractice(sub) {
     const player = new ExercisePlayer(host);
     let idx = 0;
     const go = (i) => { idx = i; [...list.children].forEach((li, k) => li.classList.toggle('cur', k === i)); player.load(WARMUP_ROUTINE[i]); };
-    WARMUP_ROUTINE.forEach((id, i) => list.append(h('li', { onclick: () => go(i) }, exText(EXERCISES[id], settings).name, h('small', {}, `${EXERCISES[id].mins}′`))));
+    WARMUP_ROUTINE.forEach((id, i) => list.append(h('li', { tabindex: 0, role: 'button', onclick: () => go(i), onkeydown: (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); go(i); } } }, exText(EXERCISES[id], settings).name, h('small', {}, `${EXERCISES[id].mins}′`))));
     player.onNext = () => { list.children[idx].classList.add('done'); if (idx + 1 < WARMUP_ROUTINE.length) go(idx + 1); else toast('Warm-up complete. Nice work.', 'good'); };
     player.onDone = () => list.children[idx].classList.add('done');
     pages.warm = { stop: () => player.stop() };
@@ -327,7 +327,7 @@ function renderSettings(sub) {
       h('h3', {}, 'Feedback'),
       field('In-tune tolerance', sel('tol', [[50, '±50¢: beginner (half a semitone)'], [35, '±35¢: standard'], [25, '±25¢: strict'], [15, '±15¢: microtone work']])),
       field('Octave-forgiving', h('span', {}, chk('octaveFree'), ' count a note as right in any octave'), 'Useful when singing a song originally sung by another voice type.'),
-      field('Hidden line by default', h('span', {}, chk('blind'), ' hide my live line in drills'), 'Practising without constant feedback improves retention (the "guidance hypothesis" in motor learning).'),
+      field('Hide my line by default', h('span', {}, chk('blind'), ' in drills, show my pitch line only afterwards'), 'Practising without constant feedback improves retention (the "guidance hypothesis" in motor learning).'),
     ),
     h('div', { class: 'card form' },
       h('h3', {}, 'Audio'),
@@ -335,7 +335,7 @@ function renderSettings(sub) {
       field('Headphones', h('span', {}, chk('headphones'), ' I sing with headphones'), 'With speakers, leave this off: echo cancellation removes the song from your microphone so it isn\'t mistaken for your voice. With headphones, switch it on for the cleanest pitch.'),
       field('Mic sensitivity', range('micSens', 0, 1, 0.05, (v) => Math.round(v * 100) + '%'), 'Raise it if quiet singing isn\'t detected; lower it if room noise is drawn as pitch.'),
       field('Guide volume', range('guideVol', 0, 1, 0.05, (v) => Math.round(v * 100) + '%')),
-      field('Guide sound', sel('guideTimbre', [['reed', 'Harmonium-like'], ['sine', 'Pure tone']])),
+      field('Guide sound', sel('guideTimbre', [['soft', 'Soft (flute-like)'], ['reed', 'Harmonium-like'], ['sine', 'Pure tone']])),
       field('Extra latency compensation', range('latencyMs', -200, 600, 1, (v) => v + ' ms'), 'Measured for you by "Delay" below. Or set it by hand if you\'re always reported behind by the same amount (Bluetooth: try 150–250 ms).'),
     ),
     deviceCard,
@@ -420,7 +420,7 @@ function route() {
   if (current === 'theory' && pages.theory) pages.theory.stopTheory();
   current = pageId;
   document.querySelectorAll('.page').forEach((el) => (el.hidden = el.id !== 'page-' + pageId));
-  document.querySelectorAll('.nav a, .tabbar a').forEach((a) => a.classList.toggle('active', a.getAttribute('href') === '#' + page));
+  document.querySelectorAll('.nav a, .tabbar a').forEach((a) => { const on = a.getAttribute('href') === '#' + page; a.classList.toggle('active', on); if (on) a.setAttribute('aria-current', 'page'); else a.removeAttribute('aria-current'); });
   document.title = page === 'today' ? 'Swara Lab · singing trainer' : `${page[0].toUpperCase() + page.slice(1)} · Swara Lab`;
   if (pageId === 'today') renderToday();
   if (pageId === 'practice') renderPractice(sub);

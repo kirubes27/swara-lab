@@ -59,6 +59,7 @@ export function fmtTime(s) {
 // One small floating panel at a time, anchored to the button that opened it.
 let openPop = null;
 export function closePopover() { if (openPop) { const p = openPop; openPop = null; p.close(); } }
+export function popoverOpen() { return !!openPop; }
 export function popover(anchor, content, { align = 'start', className = '', onClose } = {}) {
   if (openPop && openPop.anchor === anchor) { closePopover(); return null; } // a second click closes it
   closePopover();
@@ -111,18 +112,29 @@ export function menu(anchor, items, opts = {}) {
     h('span', { class: 'mi-text' }, h('span', {}, it.label), it.sub ? h('small', {}, it.sub) : null),
     it.end ? h('span', { class: 'mi-end' }, it.end) : null));
   }
+  list.addEventListener('keydown', (e) => {
+    const items = [...list.querySelectorAll('.menu-item:not(:disabled)')];
+    const i = items.indexOf(document.activeElement);
+    const go = (k) => { e.preventDefault(); items[(k + items.length) % items.length]?.focus(); };
+    if (e.key === 'ArrowDown') go(i + 1); else if (e.key === 'ArrowUp') go(i < 0 ? -1 : i - 1);
+    else if (e.key === 'Home') go(0); else if (e.key === 'End') go(-1);
+    else if (e.key === 'Tab') { e.preventDefault(); closePopover(); anchor.focus(); }
+  });
   return popover(anchor, list, opts);
 }
 // A centred dialog for anything that needs more room than a menu.
+let sheetN = 0;
 export function sheet(title, body, { actions = [], onClose, wide = false } = {}) {
+  const back = openPop ? openPop.anchor : document.activeElement; // where focus returns afterwards
   closePopover();
-  const dlg = h('dialog', { class: 'sheet' + (wide ? ' wide' : '') });
+  const id = 'sheet-title-' + ++sheetN;
+  const dlg = h('dialog', { class: 'sheet' + (wide ? ' wide' : ''), 'aria-labelledby': id });
   const close = () => { if (dlg.open) dlg.close(); };
-  dlg.append(
-    h('div', { class: 'sheet-head' }, h('h3', {}, title), h('button', { class: 'icon-btn', 'aria-label': 'Close', onclick: close }, icon('close', 18))),
+  dlg.append(...[
+    h('div', { class: 'sheet-head' }, h('h3', { id }, title), h('button', { class: 'icon-btn', 'aria-label': 'Close', onclick: close }, icon('close', 18))),
     h('div', { class: 'sheet-body' }, body),
-    actions.length ? h('div', { class: 'sheet-foot' }, ...actions) : null);
-  dlg.addEventListener('close', () => { dlg.remove(); onClose && onClose(); });
+    actions.length ? h('div', { class: 'sheet-foot' }, ...actions) : null].filter(Boolean));
+  dlg.addEventListener('close', () => { dlg.remove(); if (back && back.isConnected && back.focus) back.focus(); onClose && onClose(); });
   dlg.addEventListener('pointerdown', (e) => { if (e.target === dlg) close(); }); // click on the backdrop
   document.body.append(dlg);
   dlg.showModal();

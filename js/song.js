@@ -1,13 +1,13 @@
 // Song Studio: load a song (YouTube / file / another tab), extract its melody,
 // loop phrases, slow down, transpose, and sing against the reference with feedback.
-import { audioCtx, mic, createTap, renderRate, audioBufferToWav, TakeRecorder, setMasterMuted } from './audio.js';
+import { audioCtx, mic, createTap, renderRate, audioBufferToWav, TakeRecorder, setMasterMuted, pushFrame } from './audio.js';
 import { tanpura, Follower } from './sound.js';
 import { PitchLane, Overview } from './lane.js';
 import { SalienceAnalyzer, trackMelody, melodyAt, melodyDuration, estimateTonic, findPhrases, F_REF } from './melody.js';
 import { analyzeTake, transcribe, fitToRange, swaraBiasText, describeSwaraBias } from './coach.js';
 import { settings, saveSettings, songs, getSong, upsertSong, removeSong, lastSong, idbGet, idbPut, packMelody, unpackMelody, logActivity } from './store.js';
 import { westernName, hzToMidi, percentile, saHzFrom, isIndian } from './music.js';
-import { h, toast, ensureMic, tipList, fmtTime, menu, popover, sheet, closePopover } from './ui.js';
+import { h, toast, ensureMic, tipList, fmtTime, menu, popover, sheet, closePopover, popoverOpen } from './ui.js';
 import { LyricsPanel } from './lyrics.js';
 import { LiveReadout, stat } from './practice.js';
 import { icon } from './icons.js';
@@ -27,13 +27,15 @@ function loadYT() {
 
 export function parseYouTubeId(url) {
   const s = url.trim();
-  if (/^[\w-]{11}$/.test(s)) return s;
+  const ok = (id) => (id && /^[\w-]{11}$/.test(id) ? id : null); // YouTube ids are exactly 11 characters
+  if (ok(s)) return s;
   try {
     const u = new URL(s);
-    if (u.hostname.includes('youtu.be')) return u.pathname.slice(1, 12);
-    if (u.searchParams.get('v')) return u.searchParams.get('v').slice(0, 11);
-    const m = u.pathname.match(/\/(embed|shorts|live|v)\/([\w-]{11})/);
-    if (m) return m[2];
+    if (!/(^|\.)(youtube\.com|youtu\.be|youtube-nocookie\.com)$/.test(u.hostname)) return null;
+    if (u.hostname.includes('youtu.be')) return ok(u.pathname.slice(1).split('/')[0]);
+    if (u.searchParams.get('v')) return ok(u.searchParams.get('v'));
+    const m = u.pathname.match(/\/(embed|shorts|live|v)\/([\w-]+)/);
+    if (m) return ok(m[2]);
   } catch {}
   return null;
 }
@@ -42,7 +44,8 @@ class YTPlayer {
   constructor(el, videoId, { onState, onError, onReady } = {}) {
     this.kind = 'youtube'; this.r = 1; this.playing = false; this.smooth = 0; this.prevNow = performance.now();
     this.ready = loadYT().then((YT) => new Promise((res) => {
-      this.p = new YT.Player(el, {
+      if (!/^[\w-]{11}$/.test(videoId || '')) { onError && onError(2); res(); return; } // 2 = invalid id (YouTube's own code)
+      try { this.p = new YT.Player(el, {
         videoId, width: '100%', height: '100%',
         playerVars: { playsinline: 1, rel: 0, modestbranding: 1, origin: location.origin },
         events: {
@@ -50,7 +53,7 @@ class YTPlayer {
           onStateChange: (e) => { this.playing = e.data === 1; if (e.data === 1) this.prevNow = performance.now(); onState && onState(e.data, this); },
           onError: (e) => onError && onError(e.data),
         },
-      });
+      }); } catch (e) { console.warn('YouTube player', e); onError && onError(2); res(); }
     }));
   }
   play() { this.ok && this.p.playVideo(); }
@@ -122,8 +125,9 @@ class AudioPlayer {
     if (!this.buf) this.buf = await audioCtx().decodeAudioData(await this.blob.arrayBuffer());
     return this.buf;
   }
-  // vocals: Float32Array mono @44.1 kHz from the separation step
-  setVocals(v) { this.vocals = v; }
+  // vocals: {L, R} (or mono) Float32Array @44.1 kHz from the separation step; gate: voiceGate()
+  setVocals(v) { this.vocals = v; this.stems = {}; }
+  setGate(g) { if (g !== this.gate) { this.gate = g; if (this.stems) delete this.stems.vocals; } }
   async setTranspose(st) { this.st0 = st; return this.rebuild(); }
   async setSound(mode) { this.mode0 = mode; return this.rebuild(); }
   async rebuild() {
@@ -154,14 +158,22 @@ class AudioPlayer {
     this.stems = this.stems || {};
     if (this.stems[mode]) return this.stems[mode];
     const orig = await renderRate(await this.decoded(), 1, 44100);
-    const v = this.vocals, n = Math.min(orig.length, v.length);
+    const V = this.vocals, chans = V.L ? [V.L, V.R] : [V, V];
     const out = new AudioBuffer({ numberOfChannels: orig.numberOfChannels, length: orig.length, sampleRate: 44100 });
     for (let ch = 0; ch < orig.numberOfChannels; ch++) {
       const x = orig.getChannelData(ch), o = out.getChannelData(ch);
-      if (mode === 'vocals') for (let i = 0; i < n; i++) o[i] = v[i];
+      const v = orig.numberOfChannels === 1 && V.L ? Float32Array.from(V.L, (a, i) => 0.5 * (a + V.R[i])) : chans[Math.min(ch, 1)];
+      const n = Math.min(x.length, v.length), g = this.gate;
+      if (mode === 'vocals') for (let i = 0; i < n; i++) o[i] = g ? v[i] * g[Math.min(g.length - 1, (i / 441) | 0)] : v[i];
       else { o.set(x); for (let i = 0; i < n; i++) o[i] = x[i] - v[i]; }
     }
-    return (this.stems[mode] = out);
+    if (mode !== 'vocals') return (this.stems[mode] = out);
+    // soften the hiss band, where cymbal bleed lives (the voice has little there)
+    const off = new OfflineAudioContext(out.numberOfChannels, out.length, 44100);
+    const src = off.createBufferSource(); src.buffer = out;
+    const shelf = off.createBiquadFilter(); shelf.type = 'highshelf'; shelf.frequency.value = 7500; shelf.gain.value = -9;
+    src.connect(shelf); shelf.connect(off.destination); src.start();
+    return (this.stems[mode] = await off.startRendering());
   }
   destroy() { this.dead = true; this.pause(); this.a.removeAttribute('src'); this.a.load(); URL.revokeObjectURL(this.url); if (this.shiftUrl) URL.revokeObjectURL(this.shiftUrl); }
 }
@@ -262,8 +274,24 @@ function placeOnVideo(recMel, mapping, liveCents, frames, minI, maxI) {
   return out;
 }
 const wrap1200 = (d) => ((((d + 600) % 1200) + 1200) % 1200) - 600;
-const toI16 = (f) => { const o = new Int16Array(f.length); for (let i = 0; i < f.length; i++) o[i] = Math.max(-32768, Math.min(32767, Math.round(f[i] * 32767))); return o; };
-const fromI16 = (a) => { const o = new Float32Array(a.length); for (let i = 0; i < a.length; i++) o[i] = a[i] / 32767; return o; };
+const i16 = (f) => { const o = new Int16Array(f.length); for (let i = 0; i < f.length; i++) o[i] = Math.max(-32768, Math.min(32767, Math.round(f[i] * 32767))); return o; };
+const f32 = (a) => { const o = new Float32Array(a.length); for (let i = 0; i < a.length; i++) o[i] = a[i] / 32767; return o; };
+// separated voice: stereo {L, R} (older songs: one mono track)
+const toI16 = (v) => (v && v.L ? { L: i16(v.L), R: i16(v.R) } : i16(v));
+const fromI16 = (v) => (v && v.L ? { L: f32(v.L), R: f32(v.R) } : f32(v));
+// Where the melody guide hears singing (±0.25 s), as a 100 Hz gain curve: 1 while singing, about
+// −24 dB elsewhere. Applied to "Voice only" it removes cymbal and drum bleed between lines.
+function voiceGate(mel, durSec) {
+  const n = Math.ceil(durSec * 100) + 2, g = new Float32Array(n).fill(0.06);
+  for (let i = 0; i < mel.cents.length; i++) {
+    if (isNaN(mel.cents[i])) continue;
+    const t = mel.t0 + i * mel.hop, a = Math.max(0, Math.floor((t - 0.25) * 100)), b = Math.min(n - 1, Math.ceil((t + 0.25) * 100));
+    for (let k = a; k <= b; k++) g[k] = 1;
+  }
+  for (let k = 1; k < n; k++) g[k] = Math.max(g[k], g[k - 1] * 0.85);      // soft release
+  for (let k = n - 2; k >= 0; k--) g[k] = Math.max(g[k], g[k + 1] * 0.75); // soft attack
+  return g;
+}
 
 const cAbove55 = (hz) => 1200 * Math.log2(hz / F_REF);
 
@@ -287,13 +315,14 @@ function simpleNotes(toks) {
 
 // ---------------------------------------------------------------------------
 const MODES = [
-  ['along', 'Sing along', 'Hear the song while you sing'],
-  ['muted', 'Solo', 'The song is muted; the guide tone can lead you'],
-  ['blind', 'Hidden line', 'Your line appears after each pass, not during it'],
+  ['along', 'Sing along', 'The song plays and you sing with it'],
+  ['muted', 'Guide only', 'The song goes quiet; a clear tone plays the tune for you'],
+  ['blind', 'Test yourself', 'The song plays, but your pitch line only shows after each pass, so your ear does the work'],
 ];
 const SPEEDS = [0.5, 0.6, 0.75, 0.85, 1];
 const SOUNDS = [['mix', 'Original'], ['vocals', 'Voice only'], ['karaoke', 'Backing track']];
 const fmtSpeed = (v) => (v === 1 ? '1×' : v + '×');
+const GUIDE_LEAD = 0.07; // seconds
 const signed = (x) => (x > 0 ? '+' : x < 0 ? '−' : '') + Math.abs(Math.round(x));
 const pct = (x) => Math.round(x * 100) + '%';
 
@@ -324,7 +353,7 @@ export class SongStudio {
     this.head = h('header', { class: 'studio-head' },
       h('div', { class: 'sh-text' }, h('div', { class: 'eyebrow' }, 'Songs'), this.titleBtn, h('div', { class: 'song-meta' }, this.subEl, this.chipsEl)),
       h('div', { class: 'sh-act' }, this.statusEl,
-        h('button', { class: 'btn small', onclick: () => this.toggleAdd() }, icon('plus', 15), 'Add song'),
+        h('button', { class: 'btn small add-btn', 'aria-label': 'Add song', onclick: () => this.toggleAdd() }, icon('plus', 15), h('span', { class: 'lbl' }, 'Add song')),
         h('button', { class: 'icon-btn', 'aria-label': 'More options', title: 'More', 'aria-haspopup': 'menu', onclick: (e) => this.openMore(e.currentTarget) }, icon('more', 20))));
     // adding a song
     this.ytInput = h('input', { type: 'url', placeholder: 'Paste a YouTube link', class: 'grow', 'aria-label': 'YouTube link', onkeydown: (e) => { if (e.key === 'Enter') this.addUrl(this.ytInput.value); } });
@@ -406,12 +435,14 @@ export class SongStudio {
   canStems() { return !!(this.player && this.player.kind === 'audio' && this.player.vocals); }
   openSound(anchor) {
     const ok = this.canStems();
-    const why = !(this.player && this.player.kind === 'audio') ? (this.song && this.song.hasCopy ? 'Switch to the recorded copy first' : 'Needs a recorded copy or an audio file') : 'Analyse the song first';
+    const why = !(this.player && this.player.kind === 'audio') ? (this.song && this.song.hasCopy ? 'Switch to the recorded copy first' : 'Needs a recorded copy or an audio file') : this.mel ? 'Needs voice separation: Analyse again (⋯ menu)' : 'Analyse the song first';
     const sw = h('input', { type: 'checkbox', checked: this.guideOn, 'aria-label': 'Guide tone', onchange: (e) => this.setGuide(e.target.checked) });
+    const hp = h('input', { type: 'checkbox', checked: !!settings.headphones, 'aria-label': 'Headphones', onchange: (e) => saveSettings({ headphones: e.target.checked }) });
     menu(anchor, [
       ...SOUNDS.map(([v, label]) => ({ label, checked: (this.sound || 'mix') === v, disabled: v !== 'mix' && !ok, sub: v === 'mix' ? null : !ok ? why : v === 'vocals' ? 'The singer on their own' : 'Everything except the singer', onclick: () => this.setSound(v) })),
       'sep',
       { el: h('label', { class: 'menu-switch' }, h('span', { class: 'mi-text' }, h('span', {}, 'Guide tone'), h('small', {}, 'The melody as a clear tone (G)')), sw) },
+      { el: h('label', { class: 'menu-switch' }, h('span', { class: 'mi-text' }, h('span', {}, 'Headphones'), h('small', {}, 'On when you listen with headphones: cleaner tracking')), hp) },
     ]);
   }
   setGuide(on) { this.guideOn = !!on; if (!this.guideOn) this.follower.set(0); this.syncTransport(); }
@@ -425,14 +456,19 @@ export class SongStudio {
     this.setStatus(mode === 'mix' ? '' : mode === 'vocals' ? 'Preparing the voice…' : 'Preparing the backing track…');
     const player = this.player;
     await player.setSound(mode);
-    if (this.soundTarget !== mode || this.player !== player) return; // a newer choice (or another song) took over
+    if (this.soundTarget !== mode || this.player !== player) { if (this.player !== player) this.setStatus(''); return; } // a newer choice (or another song) took over
     this.sound = mode; this.setStatus(''); this.syncTransport();
   }
   openMode(anchor) { menu(anchor, MODES.map(([v, label, sub]) => ({ label, sub, checked: this.mode === v, onclick: () => this.setMode(v) }))); }
   setMode(m, quiet = false) {
+    const was = this.mode;
     this.mode = m;
     this.player && this.player.mute(m === 'muted');
-    if (m === 'muted' && !this.guideOn && !quiet) toast('Tip: turn on the guide tone (Sound menu, or G) to hear the melody while the song is muted.', 'info', 5000);
+    if (!quiet) {
+      if (m === 'muted' && !this.guideOn) { this.setGuide(true); this.guideAuto = true; } // the guide is the point of this mode
+      else if (was === 'muted' && m !== 'muted' && this.guideAuto) { this.setGuide(false); }
+      if (m !== 'muted') this.guideAuto = false;
+    }
     this.syncTransport();
   }
 
@@ -476,7 +512,7 @@ export class SongStudio {
       el = h('button', { class: 'chip-btn', 'aria-haspopup': 'dialog', onclick: (e) => el._on && el._on(e) }, h('span', { class: 'cl' }), h('span', { class: 'cv' }));
       this._chips.set(key, el);
     }
-    el._on = onclick; el.className = 'chip-btn' + (tone ? ' ' + tone : ''); el.title = title;
+    el._on = onclick; el.className = 'chip-btn' + (tone ? ' tone-' + tone : ''); el.title = title;
     el.firstChild.textContent = label || ''; el.firstChild.hidden = !label; el.lastChild.textContent = value;
     return el;
   }
@@ -497,9 +533,9 @@ export class SongStudio {
     this.renderEmpty();
   }
   rangeFit() {
-    const span = `${westernName(hzToMidi(this.melP5))}–${westernName(hzToMidi(this.melP95))}`;
-    if (settings.rangeLowMidi == null) return { span, tone: '', title: 'Melody range. Do the range test for a key suggestion.' };
     const shift = (this.source === 'audio' ? this.song.transpose || 0 : 0) + 12 * (this.song.octave || 0);
+    const span = `${westernName(hzToMidi(this.melP5) + shift)}–${westernName(hzToMidi(this.melP95) + shift)}`;
+    if (settings.rangeLowMidi == null) return { span, tone: '', title: 'Melody range. Do the range test for a key suggestion.' };
     const lo = hzToMidi(this.melP5) + shift, hi = hzToMidi(this.melP95) + shift;
     const over = Math.max(0, Math.round(hi - (settings.rangeHighMidi - 1))), under = Math.max(0, Math.round((settings.rangeLowMidi + 1) - lo));
     return { span, over, under, tone: over || under ? 'warn' : 'good', title: over || under ? 'Partly outside your comfortable range' : 'Fits your range' };
@@ -510,7 +546,7 @@ export class SongStudio {
     const box = h('div', { class: 'keypop' });
     const draw = () => {
       const m = hzToMidi(this.songSa), cents = Math.round((m - Math.round(m)) * 100);
-      const cands = (s[this.source + 'SaCands'] || []).slice(1, 4);
+      const cands = (s[this.source + 'SaCands'] || []).filter((hz) => Math.abs(1200 * Math.log2(hz / this.songSa)) > 50).slice(0, 3);
       const stepper = (label, value, dec, inc, disabled) => h('div', { class: 'stepper' }, h('span', { class: 'sp-l' }, label),
         h('div', { class: 'sp-c' }, h('button', { class: 'btn small round', 'aria-label': label + ' down', disabled, onclick: dec }, '−'), h('span', { class: 'sp-v' }, value), h('button', { class: 'btn small round', 'aria-label': label + ' up', disabled, onclick: inc }, '+')));
       const tr = s.transpose || 0, oc = s.octave || 0;
@@ -647,6 +683,15 @@ export class SongStudio {
     if (this.coach.active && this.coach.onLyrics) this.coach.onLyrics();
   }
 
+  // Stop whatever is playing (and the guide tone) before the player goes away.
+  stopPlayer() {
+    if (!this.player) return;
+    this.finishTake(true); // a take on the old song isn't scored against the next one
+    try { if (this.player.playing) this.player.pause(); } catch {}
+    this.follower.set(0);
+    this.player.destroy(); this.player = null;
+    this.onState(2);
+  }
   resetTake() {
     this.finishTake(true);
     this.curPhrase = null; this.lastTakeFrames = null; this.lastTake = null;
@@ -662,8 +707,14 @@ export class SongStudio {
     if (this.coach.active) { this.closeCoach(); if (/^#songs\/learn/.test(location.hash)) history.replaceState(null, '', '#songs'); }
     closePopover();
     this.resetTake();
-    if (this.player) { this.player.destroy(); this.player = null; }
+    this.stopPlayer();
     this.lyrics.load(null);
+    // forget the previous song at once, so nothing of it stays clickable while the next one loads
+    this.undo = null; this.mel = null; this.phrases = []; this.soundTarget = 'mix'; this.setStatus('');
+    this.overview.mel = null; this.overview.phrases = []; this.overview.loop = null;
+    this.lane.refAt = null; this.lane.labels = []; this.lane.regions = []; this.lastTakeFrames = null;
+    this.readout.update(NaN); this.hideOverlay();
+    this.chipsEl.replaceChildren(); this.renderPhrases();
     if (!id || !getSong(id)) {
       this.song = null; this.mel = null; this.phrases = [];
       this.playerBox.replaceChildren(h('div', { class: 'player-empty' }, h('p', {}, 'Add a song to begin.'), h('button', { class: 'btn primary small', onclick: () => this.toggleAdd(true) }, icon('plus', 15), 'Add song')));
@@ -738,6 +789,7 @@ export class SongStudio {
       this.melP5 = F_REF * Math.pow(2, percentile(v, 0.05) / 1200); this.melP95 = F_REF * Math.pow(2, percentile(v, 0.95) / 1200);
     }
     this.overview.mel = mel; this.overview.phrases = this.phrases;
+    if (mel && this.source === 'audio' && this.player && this.player.kind === 'audio' && this.player.setGate) this.player.setGate(voiceGate(mel, this.player.duration() || melodyDuration(mel)));
     this.refreshKey();
     this.renderPhrases();
     if (this.lyrics && this.lyrics.song === s) this.lyrics.realign();
@@ -781,18 +833,20 @@ export class SongStudio {
   }
   async setTranspose(st) {
     st = Math.max(-6, Math.min(6, st));
-    if (this.source !== 'audio') return;
-    if (st === (this.song.transpose || 0) && this.player && this.player.st0 === st) return;
+    if (this.source !== 'audio' || !this.player) return;
+    if (st === (this.song.transpose || 0) && this.player.st0 === st) return;
+    const song = this.song, player = this.player;
     this.setStatus('Transposing…');
-    await this.player.setTranspose(st);
-    this.song.transpose = st; upsertSong(this.song); this.refreshKey();
+    await player.setTranspose(st);
+    if (this.song !== song || this.player !== player) return; // another song took over meanwhile
+    song.transpose = st; upsertSong(song); this.refreshKey();
     this.setStatus('');
   }
   async switchSource(src) {
     if (src === this.source || this.guardBusy()) return;
     this.resetTake();
     this.source = src; this.song.useCopy = src === 'audio'; upsertSong(this.song);
-    if (this.player) { this.player.destroy(); this.player = null; }
+    this.stopPlayer(); this.undo = null;
     await this.mountPlayer(); await this.loadMelody();
     if (!this.mel && src === 'audio') await this.analyzeAudio();
     this.renderInfo();
@@ -866,7 +920,7 @@ export class SongStudio {
     this.phraseEls = this.phrases.map((p, i) => {
       const best = this.song.best[i];
       const words = this.lyrics ? this.lyrics.textBetween(p.start, p.end) : '';
-      const li = h('li', { class: this.curPhrase === i ? 'cur' : '', onclick: () => this.loopPhrase(i) },
+      const li = h('li', { class: this.curPhrase === i ? 'cur' : '', tabindex: 0, role: 'button', 'aria-current': this.curPhrase === i ? 'true' : null, 'aria-label': `Loop line ${i + 1}${words ? ': ' + words : ''}`, onclick: () => this.loopPhrase(i), onkeydown: (e) => { if ((e.key === 'Enter' || e.key === ' ') && e.target === li) { e.preventDefault(); this.loopPhrase(i); } } },
         h('span', { class: 'ptime mono' }, fmtTime(p.start)),
         h('span', { class: 'ptext' }, words ? h('span', { class: 'pwords' }, words) : null, h('span', { class: 'psargam' }, p.sargam || '')),
         h('span', { class: 'pbest ' + (best >= 75 ? 'good' : best >= 50 ? 'ok' : best != null ? 'bad' : '') }, best != null ? String(best) : ''),
@@ -971,8 +1025,9 @@ export class SongStudio {
   key(e) {
     if (!this.active || e.defaultPrevented || e.metaKey || e.ctrlKey || e.altKey) return;
     const ae = document.activeElement;
-    if ((ae && (/INPUT|TEXTAREA|SELECT/.test(ae.tagName) || ae.isContentEditable)) || document.querySelector('dialog[open]')) return;
+    if ((ae && (/INPUT|TEXTAREA|SELECT/.test(ae.tagName) || ae.isContentEditable)) || document.querySelector('dialog[open]') || popoverOpen()) return;
     const k = e.key;
+    if ((k === ' ' || k === 'Enter') && ae && ae !== document.body && ae.matches('button, a, summary, [role=button], [tabindex]') && ae.matches(':focus-visible')) return; // let the focused control handle it
     if (this.lyrics.state === 'tap' && k === ' ') { e.preventDefault(); this.lyrics.tap(); return; }
     if (this.coach.active) { if (this.coach.key && this.coach.key(e)) { e.preventDefault(); return; } if (k === ' ' || /^Arrow(Up|Down)$/.test(k)) return; }
     if (k === ' ') { e.preventDefault(); this.toggle(); }
@@ -1014,6 +1069,14 @@ export class SongStudio {
     }
     if (this.timeEl) this.timeEl.textContent = fmtTime(t) + ' / ' + fmtTime(p ? p.duration() : 0);
     if (coaching && this.coach.frame) this.coach.frame(t, playing);
+    // singing along through speakers: say once that headphones track far better
+    if (mic.running && playing && !settings.headphones && !this.speakerTip && !this.capturing && this.mode !== 'muted' && (p.muted !== true)) {
+      this.speakerTip = true;
+      if (!settings.speakerTipShown) {
+        saveSettings({ speakerTipShown: true });
+        toast('Singing with the song through speakers? Use headphones if you can: the song has to be filtered out of your mic, and that can cut your voice too. Then switch on Headphones in the Sound menu.', 'info', 11000);
+      }
+    }
     // mic frames
     if (!wrapped && mic.running && mic.last && playing && !this.capturing && this.collect !== false) {
       const f = mic.last;
@@ -1022,12 +1085,13 @@ export class SongStudio {
         const lat = (mic.latencySec() + (c.outputLatency || 0.02) + (settings.latencyMs || 0) / 1000) * (p.r || 1);
         const st = t - lat;
         if (this.takeStart == null) { this.takeStart = st; this.startTakeRecording(); }
-        this.frames.push({ t: st, c: f.hz > 0 ? 1200 * Math.log2(f.hz / this.practiceSa) : NaN });
+        pushFrame(this.frames, { t: st, c: f.hz > 0 ? 1200 * Math.log2(f.hz / this.practiceSa) : NaN });
       }
     }
-    // guide tone follows the melody
+    // guide tone follows the melody, aimed a little ahead: it is set once per animation frame, glides
+    // to each pitch, and passes through the audio output, so aiming at "now" would sound late
     if (this.guideOn && playing && this.mel) {
-      const r = this.refAt(t);
+      const r = this.refAt(t + GUIDE_LEAD * (p.r || 1));
       this.follower.vol = settings.guideVol;
       this.follower.set(isNaN(r) ? 0 : this.practiceSa * Math.pow(2, r / 1200));
     }
@@ -1077,7 +1141,7 @@ export class SongStudio {
     const b = span ? span.b : this.loopOn && this.loop ? this.loop.b : frames[frames.length - 1].t;
     const res = analyzeTake({
       frames, refAt: this.refAt, start: a, end: b, tol: settings.tol, octaveFree: settings.octaveFree, tuning: settings.tuning,
-      rangeHi: settings.rangeHighMidi != null ? (settings.rangeHighMidi - hzToMidi(this.practiceSa)) * 100 : null,
+      rangeHi: settings.rangeHighMidi != null ? (settings.rangeHighMidi - hzToMidi(this.practiceSa)) * 100 : null, forgiveLag: !coaching,
     });
     this.lastTakeFrames = frames;
     this.lastTake = { res, blob, a, b, frames, phrase: this.loopOn ? this.curPhrase : null };
@@ -1301,6 +1365,7 @@ export class SongStudio {
     await idbPut('melody', song.id + ':' + source, packMelody(mel));
     if (savedCopy) toast('Saved a recorded copy. Use the Source chip to switch to it: then you can transpose, or hear the voice or the backing alone.', 'good', 8000);
     if (firstCapture) { song[source + 'Sa'] = null; upsertSong(song); }
+    if (song.lyricsTiming) { for (const k of [source, 'audio']) if (song.lyricsTiming[k] && !song.lyricsTiming[k].user) delete song.lyricsTiming[k]; upsertSong(song); } // re-time lyrics to the new guide
     if (this.song !== song || this.source !== source) return; // user moved on; data is saved for later
     this.mel = mel;
     this.analyzeMelody();
@@ -1318,7 +1383,9 @@ export class SongStudio {
       const { mel, vocals, separated } = await analyzeBlob(blob, (p, step, d) => { if (this.song === song) this.showProgress(step, p, d); });
       await idbPut('melody', song.id + ':audio', packMelody(mel));
       if (vocals) await idbPut('audio', song.id + ':vocals', toI16(vocals));
-      song.audioSa = null; song.audioSeparated = separated; upsertSong(song);
+      song.audioSa = null; song.audioSeparated = separated;
+      if (song.lyricsTiming && song.lyricsTiming.audio && !song.lyricsTiming.audio.user) delete song.lyricsTiming.audio; // re-time lyrics to the new guide
+      upsertSong(song);
       if (this.song === song && this.source === 'audio') {
         if (vocals && this.player && this.player.kind === 'audio') this.player.setVocals(vocals);
         this.mel = mel;
@@ -1356,7 +1423,7 @@ export class SongStudio {
     let stream;
     try {
       stream = await navigator.mediaDevices.getDisplayMedia({ video: { frameRate: 1, width: 320, height: 180 }, audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false }, selfBrowserSurface: 'exclude', systemAudio: 'include' });
-    } catch { return; }
+    } catch (e) { if (!e || e.name !== 'NotAllowedError') toast('Couldn\'t start the recording: ' + ((e && e.message) || e), 'bad', 7000); return; }
     const at = stream.getAudioTracks()[0];
     if (!at) { stream.getTracks().forEach((t) => t.stop()); return toast('No sound was shared. Pick the tab with the song and keep "Also share tab audio" on.', 'bad', 8000); }
     const rec = new MediaRecorder(new MediaStream([at]), { audioBitsPerSecond: 160000 });
@@ -1379,7 +1446,8 @@ export class SongStudio {
     if (blob.size < 20000) return toast('The recording is empty. Was the tab\'s sound shared?', 'bad');
     const id = 'au-' + Date.now().toString(36);
     await idbPut('audio', id, blob);
-    upsertSong({ id, kind: 'audio', title: name.value || 'Recorded song', created: new Date().toISOString() });
+    const title = name.value.trim() || 'Recorded song';
+    upsertSong({ id, kind: 'audio', title, untitled: title === 'Recorded song', created: new Date().toISOString() });
     this.toggleAdd(false);
     await this.open(id);
     await this.analyzeAudio();
@@ -1388,8 +1456,8 @@ export class SongStudio {
     if (!this.song) return;
     if (!confirm(`Remove "${this.song.title}" and its melody and practice data from this browser?`)) return;
     const id = this.song.id;
-    if (this.player) this.player.destroy();
-    this.player = null; this.song = null; this.mel = null;
+    this.stopPlayer();
+    this.song = null; this.mel = null;
     removeSong(id);
     this.open(songs[0] && songs[0].id);
   }

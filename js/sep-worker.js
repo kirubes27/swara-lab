@@ -102,9 +102,7 @@ async function separateKim(L, R, url, post) {
     const el = (performance.now() - t0) / 1000, done = (c + 1) / chunks;
     post('separate', done, { model: 'kim', gpu: ep === 'webgpu', eta: (el / done) * (1 - done) });
   }
-  const v = new Float32Array(n);
-  for (let k = 0; k < n; k++) v[k] = 0.5 * (outL[k] + outR[k]);
-  return v;
+  return { L: outL, R: outR }; // stereo: subtracting each channel's own voice leaves no voice in the backing
 }
 
 // ---- Mel-Band RoFormer (Kimberley Jensen's vocals model, MIT; ONNX export by audiojs) ----------------
@@ -195,9 +193,9 @@ async function separateRoformer(L, R, url, post, testEP) {
     if (wantFast) throw new Error('FAST');
     post('separate', done, { model: 'roformer', gpu: ep === 'webgpu', eta: (el / done) * (1 - done) });
   }
-  const v = new Float32Array(n), off0 = wide ? border : 0;
-  for (let i = 0; i < n; i++) { const w = wsum[i + off0] > 0 ? wsum[i + off0] : 1; v[i] = (0.5 * (acc[0][i + off0] + acc[1][i + off0])) / w; }
-  return v;
+  const vL = new Float32Array(n), vR = new Float32Array(n), off0 = wide ? border : 0;
+  for (let i = 0; i < n; i++) { const w = wsum[i + off0] > 0 ? wsum[i + off0] : 1; vL[i] = acc[0][i + off0] / w; vR[i] = acc[1][i + off0] / w; }
+  return { L: vL, R: vR };
 }
 
 // ---- Spleeter 2-stem (fallback): magnitude in, vocal magnitude out -------------------------------
@@ -240,9 +238,9 @@ async function separateSpleeter(L, R, url, post) {
       for (let i = 0; i < N_FFT; i++) { out[c][off + i] += (re[i] / N_FFT) * win[i]; if (c === 0) wsum[off + i] += win[i] * win[i]; }
     }
   }
-  const v = new Float32Array(N);
-  for (let i = 0; i < N; i++) { const w = wsum[i + pad] > 1e-6 ? wsum[i + pad] : 1; v[i] = (0.5 * (out[0][i + pad] + out[1][i + pad])) / w; }
-  return v;
+  const vL = new Float32Array(N), vR = new Float32Array(N);
+  for (let i = 0; i < N; i++) { const w = wsum[i + pad] > 1e-6 ? wsum[i + pad] : 1; vL[i] = out[0][i + pad] / w; vR[i] = out[1][i + pad] / w; }
+  return { L: vL, R: vR };
 }
 
 function decimate2(x) {
@@ -272,7 +270,7 @@ self.onmessage = async (e) => {
         try {
           const refine = (step, p, extra = {}) => post('refine', step === 'separate' ? p : 0, { ...extra, model: 'roformer' });
           const kim = await separateKim(L, R, models.kim, refine);
-          for (let i = 0; i < vocals.length; i++) vocals[i] = 0.65 * vocals[i] + 0.35 * kim[i];
+          for (const ch of ['L', 'R']) { const a = vocals[ch], b = kim[ch]; for (let i = 0; i < a.length; i++) a[i] = 0.65 * a[i] + 0.35 * b[i]; }
           model = 'roformer+kim';
         } catch (err) { if (String(err && err.message) === 'FAST') wantFast = false; else console.warn('Kim refinement skipped:', err); }
       }
@@ -292,9 +290,11 @@ self.onmessage = async (e) => {
       }
     }
     post('trace', 0, { model });
-    const v22 = decimate2(vocals);
+    const mono = new Float32Array(vocals.L.length);
+    for (let i = 0; i < mono.length; i++) mono[i] = 0.5 * (vocals.L[i] + vocals.R[i]);
+    const v22 = decimate2(mono);
     const mel = analyzeSignal(v22, v22, 22050, { center: 0, silence: 0.1, onProgress: (p) => post('trace', p, { model }) });
-    self.postMessage({ done: true, vocals, model, mel: { hop: mel.hop, t0: mel.t0, cents: mel.cents } }, [vocals.buffer, mel.cents.buffer]);
+    self.postMessage({ done: true, vocals, model, mel: { hop: mel.hop, t0: mel.t0, cents: mel.cents } }, [vocals.L.buffer, vocals.R.buffer, mel.cents.buffer]);
   } catch (err) {
     self.postMessage({ error: String((err && err.message) || err) });
   }

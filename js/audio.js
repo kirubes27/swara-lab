@@ -88,12 +88,19 @@ export class Mic {
     const now = performance.now();
     // background level: drops at once to quiet moments, rises only slowly (~10 s), so a long
     // sustained note is never mistaken for background noise
-    this.floor = !this.floor || level < this.floor ? level : this.floor + (level - this.floor) * 0.0015;
+    // Holding a note: for 150 ms after a pitch was accepted, a quieter or less clearly periodic frame
+    // near that pitch still counts (breathy singing, or the voice partly removed by echo cancellation).
+    const holding = this.acc && now - this.acc.t < 150;
+    const need = holding ? Math.max(this.gate * 0.7, this.floor * 1.4) : Math.max(this.gate, this.floor * 2);
     let hz = 0, clarity = 0;
-    if (level > Math.max(this.gate, this.floor * 2)) {
-      const r = this.yin.detect(this.buf);
-      if (r && r.clarity > 0.65 && r.hz >= this.lowHz * 0.94 && r.hz <= this.highHz * 1.06) { hz = r.hz; clarity = r.clarity; }
+    if (level > need) {
+      const r = this.yin.detect(this.buf, holding ? { hz: this.acc.hz, maxD: 0.4 } : null);
+      if (r && r.clarity > (holding ? 0.58 : 0.65) && r.hz >= this.lowHz * 0.94 && r.hz <= this.highHz * 1.06) { hz = r.hz; clarity = r.clarity; }
     }
+    // background level: drops at once to quiet moments, rises only slowly (~10 s) and never while a
+    // note is being sung, so a long held note is never mistaken for background noise
+    if (!this.floor || level < this.floor) this.floor = level;
+    else if (!hz) this.floor += (level - this.floor) * 0.0015;
     // Jump confirmation against the recent context (median of what was sung in the last 1.5 s):
     // a leap of more than ~3.5 semitones is only believed once it repeats (2 frames; ~6 frames for
     // an octave or more). Real leaps survive with a tiny delay; blips from consonants, drum hits or
@@ -104,7 +111,10 @@ export class Mic {
       let ref = null;
       if (this.ctxp.length >= 5) { const v = this.ctxp.map((p) => p.hz).sort((a, b) => a - b); ref = v[v.length >> 1]; }
       else if (this.acc && now - this.acc.t < 160) ref = this.acc.hz;
-      const jump = ref ? Math.abs(1200 * Math.log2(hz / ref)) : 0;
+      let jump = ref ? Math.abs(1200 * Math.log2(hz / ref)) : 0;
+      if (ref && Math.abs(jump - 1200) < 60 && !(this.pend && Math.abs(1200 * Math.log2(hz / this.pend.hz)) < 80)) {
+        hz = hz > ref ? hz / 2 : hz * 2; jump = Math.abs(1200 * Math.log2(hz / ref)); // a one-off octave slip of the detector
+      }
       if (!ref || jump < 350) { out = hz; this.pend = null; }
       else if (this.pend && Math.abs(1200 * Math.log2(hz / this.pend.hz)) < 80) {
         if (++this.pend.n >= (jump > 900 ? 6 : 2)) { out = hz; this.pend = null; this.ctxp = []; } // a confirmed leap starts a new context
@@ -123,6 +133,21 @@ export class Mic {
 }
 
 export const mic = new Mic();
+
+// Add a pitch frame {t, c} (c = cents, NaN = unvoiced) to a take. A dropout of up to 0.12 s between
+// two frames of the same note (within 80 cents) is filled in, so a sustained note isn't shown
+// or scored as broken by a few lost frames.
+export function pushFrame(frames, f) {
+  if (!isNaN(f.c) && frames.length) {
+    let k = frames.length - 1;
+    while (k >= 0 && isNaN(frames[k].c) && f.t - frames[k].t < 0.13) k--;
+    if (k >= 0 && k < frames.length - 1 && !isNaN(frames[k].c) && f.t - frames[k].t <= 0.13 && Math.abs(f.c - frames[k].c) < 80) {
+      const a = frames[k];
+      for (let j = k + 1; j < frames.length; j++) frames[j].c = a.c + ((f.c - a.c) * (frames[j].t - a.t)) / (f.t - a.t);
+    }
+  }
+  frames.push(f);
+}
 
 // Record the microphone (for listening back to a take).
 export class TakeRecorder {

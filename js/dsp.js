@@ -71,7 +71,10 @@ export class Yin {
     this.d = new Float64Array(this.tauMax + 2);
   }
   // Returns { hz, clarity } or null.
-  detect(buf) {
+  // hint: { hz, maxD } — the pitch being sung a moment ago. A dip near it is accepted with weaker
+  // periodicity (d ≤ maxD), so a held note isn't lost when the voice turns breathy or is partly
+  // removed by echo cancellation.
+  detect(buf, hint = null) {
     const { tauMin, tauMax, d } = this;
     const W = buf.length - tauMax - 1;
     if (W < 64) return null;
@@ -104,9 +107,16 @@ export class Yin {
       // fallback: the deepest local minimum strictly inside the range, only if clearly periodic
       let best = 1, bt = -1;
       for (let t = tauMin + 1; t < tauMax - 2; t++) if (d[t] < best && d[t] <= d[t - 1] && d[t] <= d[t + 1]) { best = d[t]; bt = t; }
-      if (bt < 0 || best > 0.22) return null;
-      tau = bt;
+      if (bt >= 0 && best <= 0.22) tau = bt;
     }
+    if (hint && hint.hz > 0) {
+      // the local minimum nearest the hinted period (±~170 cents)
+      const tc = this.sr / hint.hz, lo = Math.max(tauMin + 1, Math.floor(tc / 1.1)), hi = Math.min(tauMax - 3, Math.ceil(tc * 1.1));
+      let bh = -1, bd = Infinity;
+      for (let t = lo; t <= hi; t++) if (d[t] <= d[t - 1] && d[t] <= d[t + 1] && d[t] < bd) { bd = d[t]; bh = t; }
+      if (bh > 0 && bd <= (hint.maxD || 0.4) && (tau < 0 || bd <= d[tau] + 0.08)) tau = bh; // keep the note, or fix an octave slip
+    }
+    if (tau < 0) return null;
     // a "pitch" at the very edge of the search range is noise or rumble, not a voice
     if (tau >= tauMax - 2 || tau <= tauMin) return null;
     // parabolic interpolation
