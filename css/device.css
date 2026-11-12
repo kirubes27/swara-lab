@@ -10,10 +10,10 @@
 .dc-row .li-ic { margin-top: 4px; transition: background-color .3s, color .3s; }
 .dc-row .li-end { margin-top: 5px; }
 .dc-row .li-end .btn { min-width: 76px; }
-.dc-ic.ok { background: color-mix(in srgb, var(--good) 14%, transparent); color: var(--good); }
-.dc-ic.warn { background: color-mix(in srgb, var(--ok) 17%, transparent); color: var(--ok); }
-.dc-ic.bad { background: color-mix(in srgb, var(--bad) 13%, transparent); color: var(--bad); }
-.dc-ic.busy, .dc-ic.live { background: var(--accent-soft); color: var(--accent); }
+.dc-ic.dc-ok { background: color-mix(in srgb, var(--good) 14%, transparent); color: var(--good); }
+.dc-ic.dc-warn { background: color-mix(in srgb, var(--ok) 17%, transparent); color: var(--ok); }
+.dc-ic.dc-bad { background: color-mix(in srgb, var(--bad) 13%, transparent); color: var(--bad); }
+.dc-ic.dc-busy, .dc-ic.dc-live { background: var(--accent-soft); color: var(--accent); }
 
 /* status line, advice, faint detail */
 .dc-row[data-state="warn"] .dc-main, .dc-row[data-state="bad"] .dc-main { color: var(--text); }
@@ -23,20 +23,20 @@
 .dc code { font-size: .92em; padding: 1px 5px; overflow-wrap: anywhere; -webkit-user-select: all; user-select: all; }
 
 /* live microphone level */
-.dc-live { display: flex; align-items: center; gap: 12px; margin-top: 10px; }
+.dc-level { display: flex; align-items: center; gap: 12px; margin-top: 10px; }
 .dc-meter { position: relative; flex: 1; min-width: 60px; max-width: 240px; height: 6px; border-radius: 3px; background: var(--surface3); overflow: hidden; }
 .dc-meter i { position: absolute; inset: 0; border-radius: inherit; background: var(--good); transform: scaleX(0); transform-origin: left center; transition: transform .07s linear, background-color .25s; }
-.dc-meter.quiet i { background: var(--text3); }
-.dc-meter.loud i { background: var(--bad); }
+.dc-meter.dc-quiet i { background: var(--text3); }
+.dc-meter.dc-loud i { background: var(--bad); }
 .dc-note { min-width: 2.3em; font: 650 1.05rem/1 var(--font-display); letter-spacing: -0.02em; font-variant-numeric: tabular-nums; }
 .dc-count { color: var(--text3); font-size: .8rem; font-variant-numeric: tabular-nums; }
 
 /* one dot per click while measuring the delay */
 .dc-dots { display: flex; gap: 7px; margin-top: 10px; }
 .dc-dots i { width: 8px; height: 8px; border-radius: 50%; background: var(--surface3); transition: background-color .2s, transform .25s var(--ease); }
-.dc-dots i.on { background: var(--accent); transform: scale(1.2); }
-.dc-dots i.hit { background: var(--good); }
-.dc-dots i.miss { background: transparent; box-shadow: inset 0 0 0 1.5px var(--text3); }
+.dc-dots i.dc-on { background: var(--accent); transform: scale(1.2); }
+.dc-dots i.dc-hit { background: var(--good); }
+.dc-dots i.dc-miss { background: transparent; box-shadow: inset 0 0 0 1.5px var(--text3); }
 
 /* OS tips */
 .dc-tips { list-style: none; margin: 3px 0 0; padding: 0; display: grid; gap: 5px; }
@@ -47,6 +47,13 @@
 .dc-spin { width: 15px; height: 15px; border-radius: 50%; border: 2px solid color-mix(in srgb, currentColor 22%, transparent); border-top-color: currentColor; animation: dc-spin .8s linear infinite; }
 @keyframes dc-spin { to { transform: rotate(360deg); } }
 .dc-report { display: block; width: 100%; min-height: 240px; font: .78rem/1.5 var(--mono); resize: vertical; }
+
+/* inside a .card (e.g. a Settings card): no second surface, rows aligned like .form fields, and no
+   second heading when the card has its own */
+.card .list.dc { background: none; box-shadow: none; border-radius: 0; overflow: visible; margin: 0; }
+.card .dc-head { padding: 0 0 12px; }
+.card .list.dc > .li.dc-row { padding-left: 0; padding-right: 0; }
+.card > h3 ~ * .dc-head h3, .card > h3 ~ .dc .dc-head h3 { display: none; }
 
 @media (max-width: 560px) {
   .dc-head { padding: 16px 14px 12px; }

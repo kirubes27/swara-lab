@@ -10,7 +10,7 @@ const ACC = { '-2': '𝄫', '-1': '♭', 0: '', 1: '♯', 2: '𝄪' };
 const MAJOR = [0, 2, 4, 5, 7, 9, 11];
 
 // How most players name the twelve pitch classes.
-export const PC_NAMES = ['C', 'C♯', 'D', 'E♭', 'E', 'F', 'F♯', 'G', 'A♭', 'A', 'B♭', 'B'];
+const PC_NAMES = ['C', 'C♯', 'D', 'E♭', 'E', 'F', 'F♯', 'G', 'A♭', 'A', 'B♭', 'B'];
 export const SHARP_NAMES = ['C', 'C♯', 'D', 'D♯', 'E', 'F', 'F♯', 'G', 'G♯', 'A', 'A♯', 'B'];
 export const FLAT_NAMES = ['C', 'D♭', 'D', 'E♭', 'E', 'F', 'G♭', 'G', 'A♭', 'A', 'B♭', 'B'];
 export const BOTH_NAMES = PC_NAMES.map((n, pc) => (isBlack(pc) ? `${SHARP_NAMES[pc]}/${FLAT_NAMES[pc]}` : n));
@@ -19,7 +19,7 @@ export const octaveOf = (m) => Math.floor(m / 12) - 1;
 export const hzOf = (m) => 440 * Math.pow(2, (m - 69) / 12);
 
 // A spelled note is { l, a }: a letter (0 = C … 6 = B) and an accidental (−2 … 2).
-export const pcOf = (n) => mod12(LETTER_PC[n.l] + n.a);
+const pcOf = (n) => mod12(LETTER_PC[n.l] + n.a);
 export const nameOf = (n) => LETTERS[n.l] + ACC[n.a];
 // The usual spelling of a pitch class (C♯, E♭, F♯, A♭, B♭ for the black keys).
 export function pcNote(pc) {
@@ -53,7 +53,7 @@ function spellFrom(pc, semis, steps) {
   return best.notes;
 }
 
-export function degreeLabel(semis, step) {
+function degreeLabel(semis, step) {
   const d = semis - MAJOR[step];
   return (d < 0 ? '♭'.repeat(-d) : '♯'.repeat(d)) + (step + 1);
 }

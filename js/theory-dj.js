@@ -182,9 +182,9 @@ function beatmatchDemo(host, scope) {
   };
   const xf = h('input', { type: 'range', min: -1, max: 1, step: 0.01, value: 0, class: 'th-xfade', 'aria-label': 'Crossfader, deck A to deck B' });
   xf.addEventListener('input', () => { xfade = +xf.value; applyFade(); });
-  const numsChk = h('input', { type: 'checkbox', checked: true, 'aria-label': 'Show tempo numbers', onchange: (e) => { showNums = e.target.checked; paintNums(); } });
+  const numsChk = h('input', { type: 'checkbox', checked: true, onchange: (e) => { showNums = e.target.checked; paintNums(); } });
   const meterDot = h('i', { class: 'th-phase-dot' });
-  const status = h('div', { class: 'th-sub th-match', 'aria-live': 'polite' }, 'Press play to start both decks.');
+  const status = h('div', { class: 'th-sub th-match' }, 'Press play to start both decks.');
   const paintNums = () => {
     const b = deckB.bpm0 * (1 + deckB.pitch);
     bpmA.textContent = showNums ? '124.0 BPM' : '';
@@ -232,7 +232,7 @@ function phrasingDemo(host, scope) {
   let L = 8;
   const cells = range(0, 31).map((i) => h('span', { class: 'th-barcell' }, String(i + 1)));
   const grid = h('div', { class: 'th-bargrid', 'aria-hidden': 'true' }, ...cells);
-  const out = readout('Bar 1 · beat 1', 'Phrase 1');
+  const out = readout('Bar 1 · beat 1', 'Phrase 1', false);
   const btn = playButton('Play');
   const layout = () => {
     cells.forEach((c, i) => { c.classList.toggle('is-start', i % L === 0); c.classList.toggle('is-alt', Math.floor(i / L) % 2 === 1); });
@@ -397,7 +397,7 @@ function eqDemo(host, scope) {
   let colors = null, frame = 0;
   const readColors = () => {
     const cs = getComputedStyle(document.documentElement);
-    colors = { low: cs.getPropertyValue('--info').trim(), mid: cs.getPropertyValue('--accent').trim(), high: cs.getPropertyValue('--good').trim(), base: cs.getPropertyValue('--surface3').trim(), text: cs.getPropertyValue('--text3').trim() };
+    colors = { low: cs.getPropertyValue('--info').trim(), mid: cs.getPropertyValue('--accent').trim(), high: cs.getPropertyValue('--good').trim(), base: cs.getPropertyValue('--surface3').trim(), text: cs.getPropertyValue('--text2').trim() };
   };
   scope.loop(() => {
     const w = canvas.clientWidth, hgt = canvas.clientHeight, dpr = Math.min(2, window.devicePixelRatio || 1);
@@ -433,7 +433,7 @@ function eqDemo(host, scope) {
     g.textAlign = 'right'; g.fillText('High', w - 2, hgt);
   });
   scope.add(() => { clock.stop(); if (nodes) { const n = nodes; setTimeout(() => { try { n.an.disconnect(); } catch { /* gone */ } }, 300); } });
-  host.append(controls(btn.el, reset, h('span', { class: 'th-note' }, 'Double-click a slider to centre it.')),
+  host.append(controls(btn.el, reset, h('span', { class: 'th-note th-hover-only' }, 'Double-click a slider to centre it.')),
     h('div', { class: 'th-eq' }, h('div', { class: 'th-eqrows' }, ...rows.map((r) => r.el)), canvas));
 }
 

@@ -75,6 +75,10 @@ function setupHeader() {
     if ('micSens' in patch) mic.setSensitivity(settings.micSens);
     if ('rangeLowMidi' in patch || 'rangeHighMidi' in patch) syncMic();
     if ('headphones' in patch) mic.setEchoCancel(!settings.headphones).then(renderHeader);
+    if ('latencyMs' in patch) { // e.g. saved by the delay measurement while Settings is open
+      const inp = document.querySelector('#page-settings input[data-key="latencyMs"]'), out = document.querySelector('#page-settings [data-out="latencyMs"]');
+      if (inp) inp.value = settings.latencyMs; if (out) out.textContent = settings.latencyMs + ' ms';
+    }
     if ('notation' in patch || 'tuning' in patch) {
       for (const k of ['player', 'warm', 'free', 'range']) { if (pages[k] && pages[k].stop) pages[k].stop(); pages[k] = null; }
       if (pages.song && pages.song.song) { pages.song.refreshKey(); pages.song.renderPhrases(); }
@@ -283,8 +287,8 @@ function renderSettings(sub) {
   const fine = h('input', { type: 'range', min: -50, max: 50, step: 1, value: settings.saFine, oninput: (e) => { fineOut.textContent = e.target.value + '¢'; }, onchange: (e) => saveSettings({ saFine: +e.target.value }) });
   const sel = (key, opts) => h('select', { onchange: (e) => saveSettings({ [key]: isNaN(+e.target.value) ? e.target.value : +e.target.value }) }, ...opts.map(([v, l]) => h('option', { value: v, selected: settings[key] == v }, l)));
   const range = (key, min, max, step, fmt = (v) => v) => {
-    const out = h('span', { class: 'mono' }, fmt(settings[key]));
-    return h('span', { class: 'row' }, h('input', { type: 'range', min, max, step, value: settings[key], oninput: (e) => (out.textContent = fmt(+e.target.value)), onchange: (e) => saveSettings({ [key]: +e.target.value }) }), out);
+    const out = h('span', { class: 'mono', 'data-out': key }, fmt(settings[key]));
+    return h('span', { class: 'row' }, h('input', { type: 'range', min, max, step, value: settings[key], 'data-key': key, oninput: (e) => (out.textContent = fmt(+e.target.value)), onchange: (e) => saveSettings({ [key]: +e.target.value }) }), out);
   };
   const chk = (key) => h('input', { type: 'checkbox', checked: !!settings[key], onchange: (e) => saveSettings({ [key]: e.target.checked }) });
   const ind = isIndian(settings);
@@ -332,7 +336,7 @@ function renderSettings(sub) {
       field('Mic sensitivity', range('micSens', 0, 1, 0.05, (v) => Math.round(v * 100) + '%'), 'Raise it if quiet singing isn\'t detected; lower it if room noise is drawn as pitch.'),
       field('Guide volume', range('guideVol', 0, 1, 0.05, (v) => Math.round(v * 100) + '%')),
       field('Guide sound', sel('guideTimbre', [['reed', 'Harmonium-like'], ['sine', 'Pure tone']])),
-      field('Extra latency compensation', range('latencyMs', -200, 600, 10, (v) => v + ' ms'), 'Measured for you by "Delay" below. Or set it by hand if you\'re always reported behind by the same amount (Bluetooth: try 150–250 ms).'),
+      field('Extra latency compensation', range('latencyMs', -200, 600, 1, (v) => v + ' ms'), 'Measured for you by "Delay" below. Or set it by hand if you\'re always reported behind by the same amount (Bluetooth: try 150–250 ms).'),
     ),
     deviceCard,
     h('div', { class: 'card form' },

@@ -50,12 +50,12 @@ export class RiffCoach {
     if (!(isFinite(a) && isFinite(b) && b > a)) return;
     if (b - a < 0.5) { const m = (a + b) / 2; a = Math.max(0, m - 0.25); b = a + 0.5; }
     this.prev = {
-      speed: s.speed, mode: s.mode, guideOn: !!s.guideOn, sound: s.sound || 'mix',
+      speed: s.speed, mode: s.mode, guideOn: !!s.guideOn, sound: this.soundNow(), // a restore may still be in flight
       loop: s.loop ? { a: s.loop.a, b: s.loop.b } : null, loopOn: !!s.loopOn, curPhrase: s.curPhrase ?? null,
     };
     this.active = true;
     this.line = { a, b, phrase: p ? phrase : null };
-    this.key = this.line.phrase != null ? 'p' + this.line.phrase : `${a.toFixed(1)}-${b.toFixed(1)}`;
+    this.recKey = this.line.phrase != null ? 'p' + this.line.phrase : `${a.toFixed(1)}-${b.toFixed(1)}`; // song.learn[recKey]
     this.hard = null;        // the part being drilled: {a, b, from, to}
     this.found = null;       // the hard part found in the last full-line pass
     this.result = null;      // what the out panel shows
@@ -96,7 +96,7 @@ export class RiffCoach {
     if (s.speed !== prev.speed) s.setSpeed(prev.speed);
     if (s.mode !== prev.mode) s.setMode(prev.mode, true);
     if (!!s.guideOn !== prev.guideOn) s.setGuide(prev.guideOn);
-    if ((s.sound || 'mix') !== prev.sound) s.setSound(prev.sound);
+    this.setSound(prev.sound);
     s.loopOn = false;
     if (prev.loop) s.setLoop(prev.loop.a, prev.loop.b, prev.loopOn); else s.loop = null;
     s.loopOn = !!(prev.loop && prev.loopOn);
@@ -126,11 +126,11 @@ export class RiffCoach {
     s.seekTo(a);
     this.updateRegions();
   }
+  // Lane shading: on the whole line, where it went wrong; while drilling, the stretch that is scored.
   updateRegions() {
-    const r = [{ start: this.span.a, end: this.span.b, kind: 'sing' }];
-    const f = this.hard ? null : this.found;
-    if (f) r.push({ start: f.a, end: f.b, kind: 'loop', label: 'Hard part' });
-    this.regions = r;
+    const f = this.found;
+    this.regions = this.hard ? [{ start: this.span.a, end: this.span.b, kind: 'sing' }]
+      : f ? [{ start: f.a, end: f.b, kind: 'loop', label: 'Hard part' }] : [];
   }
 
   // Held notes of the line (the same ones the header lists and the result scores).
@@ -145,8 +145,8 @@ export class RiffCoach {
   proseName(t) { return isIndian(settings) ? SWARA_LONG[t.idx] : this.label(t); }
 
   // ---- progress ------------------------------------------------------------------
-  peek() { const L = this.s.song.learn; return (L && L[this.key]) || {}; }
-  rec() { const s = this.s, L = s.song.learn || (s.song.learn = {}); return L[this.key] || (L[this.key] = {}); }
+  peek() { const L = this.s.song.learn; return (L && L[this.recKey]) || {}; }
+  rec() { const s = this.s, L = s.song.learn || (s.song.learn = {}); return L[this.recKey] || (L[this.recKey] = {}); }
   save() { upsertSong(this.s.song); }
   best(id) { return this.hard ? this.hardBest[id] : this.peek()[id]; }
   passed(id) { if (id === 'listen') return !!this.peek().listen; const b = this.best(id); return b != null && b >= PASS; }
@@ -177,10 +177,11 @@ export class RiffCoach {
     s.collect = st !== 'listen';
     return this.setSound(st === 'listen' && s.canStems() ? 'vocals' : 'mix');
   }
+  // The studio's setSound is async (it may rebuild the audio): track where it is heading.
+  soundNow() { return this.soundP ? this.soundWant : this.s.sound || 'mix'; }
   setSound(snd) {
     const s = this.s;
-    if (this.soundP && this.soundWant === snd) return this.soundP;
-    if ((s.sound || 'mix') === snd) return Promise.resolve();
+    if (this.soundNow() === snd) return this.soundP || Promise.resolve();
     this.soundWant = snd;
     const p = this.soundP = Promise.resolve().then(() => s.setSound(snd)).catch((e) => console.warn(e))
       .finally(() => { if (this.soundP === p) this.soundP = null; });
@@ -328,9 +329,13 @@ export class RiffCoach {
     if (!ctx || ctx.used || ctx.step === 'listen' || !frames || !frames.length) return;
     ctx.used = true;
     const sp = ctx.span;
+    // in time order (a frame taken on the loop wrap can carry the time from before the seek)
+    let sorted = true;
+    for (let i = 1; i < frames.length && sorted; i++) if (frames[i].t < frames[i - 1].t) sorted = false;
+    if (!sorted) frames = frames.slice().sort((x, y) => x.t - y.t);
     if (frames[0].t > sp.a + 0.3 || frames[frames.length - 1].t < sp.b - 0.3) return; // a partial pass
     const opt = { refAt: s.refAt, start: sp.a, end: sp.b, tol: settings.tol, octaveFree: settings.octaveFree, tuning: settings.tuning };
-    const same = this.span.a === sp.a && this.span.b === sp.b;
+    const same = sorted && this.span.a === sp.a && this.span.b === sp.b;
     const base = res && same ? res : analyzeTake({ frames, ...opt });
     if (!(base.refVoicedSec >= 0.5)) { this.result = { empty: true }; this.renderOut(); return; }
     // Pitch is judged on its own: a steady timing offset is reported, not penalised.
@@ -438,15 +443,16 @@ export class RiffCoach {
     const title = lines.length ? lines.map((x) => h('span', { class: 'rc-tl' }, x))
       : notes || (L.phrase != null ? `Line ${L.phrase + 1}` : 'Your selection');
     const long = words.length > 70 || lines.length > 2;
-    s.coachHead.replaceChildren(
+    s.coachHead.replaceChildren(...[
       h('a', { class: 'back rc-back', href: '#songs' }, icon('back', 18), h('span', {}, s.song.title || 'Songs')),
       h('div', { class: 'eyebrow rc-eyebrow' }, eyebrow),
       h('h1', { class: 'rc-title' + (lines.length ? '' : ' notes') + (long ? ' long' : '') }, title),
       lines.length && notes ? h('p', { class: 'rc-notes', 'aria-label': 'Notes' }, notes) : null,
       this.hard ? h('div', { class: 'rc-part' },
         h('span', { class: 'rc-part-l' }, 'Hard part'),
-        h('span', { class: 'rc-part-t' }, `${fmtTime(this.hard.a)}–${fmtTime(this.hard.b)}`),
-        h('button', { class: 'btn small', onclick: tap(() => this.wholeLine()) }, 'Whole line')) : null);
+        h('span', { class: 'rc-part-t' }, `· ${fmtTime(this.hard.a)}–${fmtTime(this.hard.b)}`),
+        h('button', { class: 'btn small', onclick: tap(() => this.wholeLine()) }, 'Whole line')) : null,
+    ].filter(Boolean));
   }
   lyricText() {
     try { const l = this.s.lyrics; return (l && l.textBetween && l.textBetween(this.line.a, this.line.b)) || ''; } catch { return ''; }
@@ -542,7 +548,8 @@ export class RiffCoach {
   }
   resultCard(R) {
     const { ctx, score, notes, lag } = R;
-    const verdict = score >= 85 ? 'That’s it.' : score >= 70 ? 'Close.' : 'Keep at it.';
+    const clean = !notes.some((n) => n.status === 'bad' || n.status === 'miss');
+    const verdict = score >= 85 && clean ? 'That’s it.' : score >= 70 ? 'Close.' : 'Keep at it.';
     const meta = STEP[ctx.step].name + ' · ' + fmtSpeed(ctx.speed) + (ctx.hard ? ' · hard part' : '');
     const card = h('section', { class: 'rc-card' + (R.fresh ? ' fresh' : ''), 'aria-label': 'Result', 'aria-live': 'polite' },
       h('div', { class: 'rc-top' },

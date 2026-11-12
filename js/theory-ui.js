@@ -55,7 +55,7 @@ export class Scope {
 
 // Immediate response for mouse and pen; touch waits for the tap (so scrolling doesn't play),
 // and keyboard activation arrives as a click with detail 0.
-export function onPress(el, fn) {
+function onPress(el, fn) {
   let type = '';
   el.addEventListener('pointerdown', (e) => { type = e.pointerType; if (e.button === 0 && (type === 'mouse' || type === 'pen')) fn(e); });
   el.addEventListener('click', (e) => { if (e.detail === 0 || (type !== 'mouse' && type !== 'pen')) fn(e); type = ''; });
@@ -96,11 +96,17 @@ export function picker(options, value, onChange, label) {
 export const field = (label, ...ctl) => h('div', { class: 'th-field' }, h('span', { class: 'th-flabel' }, label), ...ctl);
 export const controls = (...kids) => h('div', { class: 'th-controls' }, ...kids);
 
-// A large line of text with a smaller one under it, announced to screen readers.
-export function readout(main = '', sub = '') {
+// A large line of text with a smaller one under it. Pass live = false when it changes
+// many times a second, so screen readers aren't flooded.
+export function readout(main = '', sub = '', live = true) {
   const m = h('div', { class: 'th-big' }, main), s = h('div', { class: 'th-sub' }, sub);
-  return { el: h('div', { class: 'th-readout', 'aria-live': 'polite' }, m, s), set(a, b = '') { m.textContent = a; s.textContent = b; } };
+  return {
+    el: h('div', { class: 'th-readout', 'aria-live': live ? 'polite' : null }, m, s),
+    set(a, b = '') { setText(m, a); setText(s, b); },
+  };
 }
+// Write text only when it changes (avoids needless layout and repeated announcements).
+export function setText(el, text) { if (el.textContent !== text) el.textContent = text; }
 
 export function playButton(label = 'Play') {
   const b = h('button', { type: 'button', class: 'btn primary th-play' });
@@ -128,7 +134,7 @@ export class Tempo {
     const step = (d) => this.set(this.bpm + d);
     this.el = h('div', { class: 'th-tempo' },
       this.repeatBtn('minus', 'Slower', () => step(-1)),
-      h('div', { class: 'th-bpm', 'aria-live': 'polite' }, this.num, h('small', {}, 'BPM')),
+      h('div', { class: 'th-bpm' }, this.num, h('small', {}, 'BPM')),
       this.repeatBtn('plus', 'Faster', () => step(1)),
       this.range,
       tap ? this.tapBtn() : null);

@@ -30,7 +30,6 @@ export function ctx() {
 }
 export const out = () => (ctx(), bus);
 export const now = () => ctx().currentTime;
-export const hasStarted = () => !!bus;
 
 // What the listener hears right now, on the audio clock (output latency removed).
 export function heardTime() {
@@ -234,7 +233,6 @@ function pluckBuffer(c, midi) {
 }
 
 const ringing = new Map(); // string number -> voice, so a new note damps the old one
-export function warmPlucks(midis) { const c = ctx(); for (const m of midis) if (m != null) pluckBuffer(c, m); }
 
 export function pluck(midi, when, { vel = 0.8, string = null, tag = null, dest = null } = {}) {
   const c = ctx();

@@ -201,7 +201,7 @@ export class ExercisePlayer {
     pumpClicks();
     const groups = planCurves(this.plan, sa).map((g) => ({ ...g, start: g.start + this.T0, end: g.end + this.T0 }));
     guide.playCurves(groups);
-    const lat = mic.latencySec() + (c.outputLatency || 0) + (settings.latencyMs || 0) / 1000;
+    const lat = mic.latencySec() + (c.outputLatency || 0.02) + (settings.latencyMs || 0) / 1000; // same terms as the Songs page and the delay measurement
     this.off = mic.on((f) => {
       const t = c.currentTime - this.T0 - lat;
       this.frames.push({ t, c: f.hz > 0 ? centsOf(f.hz, sa) : NaN });

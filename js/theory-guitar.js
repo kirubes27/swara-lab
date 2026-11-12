@@ -3,11 +3,11 @@ import { h, ensureMic } from './ui.js';
 import { mic } from './audio.js';
 import * as A from './theory-audio.js';
 import {
-  mod12, hzOf, SHARP_NAMES, BOTH_NAMES, SCALES, scaleNotes, tonicName, CHORDS, chordTones, chordName,
+  mod12, hzOf, SHARP_NAMES, BOTH_NAMES, SCALES, scaleNotes, tonicName, CHORDS, chordTones,
   identifyChord, diatonicChords, TUNING, STRING_NAMES, SHAPES, BARRE_EXAMPLES, guitarShape, shapeNotes,
   pentatonicBox, scalePosition,
 } from './theory-core.js';
-import { Fretboard, chordBox, seg, picker, field, controls, readout, playButton, Tempo, ic, svg, noteLabel } from './theory-ui.js';
+import { Fretboard, chordBox, seg, picker, field, controls, readout, playButton, Tempo, ic, svg, noteLabel, setText } from './theory-ui.js';
 
 const range = (a, b) => Array.from({ length: b - a + 1 }, (_, i) => a + i);
 const soon = () => A.now() + 0.03;
@@ -89,8 +89,8 @@ function openChordsDemo(host, scope) {
     b.addEventListener('click', () => { cards.forEach((x) => x.classList.toggle('is-sel', x === b)); play(c.shape); });
     return b;
   });
-  const styleSeg = seg([['down', 'Strum down'], ['up', 'Strum up'], ['pick', 'One string at a time']], style, (v) => { style = v; }, 'How to play');
-  host.append(controls(field('Play', styleSeg.el)), h('div', { class: 'th-boxgrid' }, ...cards),
+  const styleSeg = seg([['down', 'Down'], ['up', 'Up'], ['pick', 'One by one']], style, (v) => { style = v; }, 'How to play the chord');
+  host.append(controls(field('Strum', styleSeg.el)), h('div', { class: 'th-boxgrid' }, ...cards),
     h('p', { class: 'th-note' }, 'Numbers are fingers. A curved bar is a barre: one finger flat across several strings.'));
   scope.add(() => A.silence(tag));
 }
@@ -209,7 +209,7 @@ function strummingDemo(host, scope) {
   const tempo = new Tempo({ bpm: 80, min: 50, max: 150, onChange: (b) => { clock.bpm = b; } });
   const patSeg = seg(STRUMS.map((p) => [p.id, p.name]), pat.id, (v) => { pat = STRUMS.find((p) => p.id === v); draw(); if (clock.running) { A.silence(tag); clock.start(); } }, 'Strumming pattern');
   const loopSel = picker(LOOPS.map((l, i) => [i, l.join(' – ')]), 0, (i) => { loop = LOOPS[i]; now.textContent = loop[0]; next.textContent = 'Next: ' + loop[1]; }, 'Chords');
-  const clickChk = h('input', { type: 'checkbox', checked: true, 'aria-label': 'Click', onchange: (e) => { clickOn = e.target.checked; } });
+  const clickChk = h('input', { type: 'checkbox', checked: true, onchange: (e) => { clickOn = e.target.checked; } });
   btn.el.addEventListener('click', () => {
     if (clock.running) { clock.stop(); A.silence(tag); btn.set(false); [...slotsEl.children].forEach((el) => el.classList.remove('is-on')); return; }
     warm(); clock.start(); btn.set(true);
@@ -278,7 +278,7 @@ function tunerDemo(host, scope) {
     noteEl.className = 'th-tnote ' + (a <= 5 ? 'is-good' : a <= 15 ? 'is-ok' : 'is-off');
     centsEl.textContent = `${est > 0 ? '+' : ''}${Math.round(est)} cents · ${f.hz.toFixed(1)} Hz`;
     if (a <= 5) { if (!inTuneSince) inTuneSince = t; } else inTuneSince = 0;
-    status.textContent = a <= 5 && t - inTuneSince > 350 ? 'In tune' : est < 0 ? 'Flat: tune up' : 'Sharp: tune down';
+    setText(status, a <= 5 && t - inTuneSince > 350 ? 'In tune' : est < 0 ? 'Flat: tune up' : 'Sharp: tune down');
     strings.forEach((b, s) => { b.classList.toggle('is-target', mode === 'guitar' && TUNING[s] === target); b.classList.toggle('is-good', mode === 'guitar' && TUNING[s] === target && a <= 5); });
   };
   btn.addEventListener('click', async () => {

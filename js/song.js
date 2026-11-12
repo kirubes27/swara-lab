@@ -176,7 +176,10 @@ const MODELS = {
 // WebGPU: the API can exist without a usable graphics adapter (common on Linux), so ask for one.
 let HAS_GPU = typeof navigator !== 'undefined' && !!navigator.gpu;
 const gpuChecked = (async () => {
-  try { HAS_GPU = !!(navigator.gpu && (await navigator.gpu.requestAdapter())); } catch { HAS_GPU = false; }
+  try {
+    const a = navigator.gpu && (await navigator.gpu.requestAdapter());
+    HAS_GPU = !!a && !(a.isFallbackAdapter || (a.info && a.info.isFallbackAdapter)); // a software adapter is no faster than the processor
+  } catch { HAS_GPU = false; }
   return HAS_GPU;
 })();
 // The quality actually used: without a graphics card the larger models take many minutes per song,

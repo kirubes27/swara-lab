@@ -84,11 +84,12 @@
   .rc-title.long { font-size: 1.3rem; }
   .rc-bar { padding: 12px; }
   .rc-steps { gap: 6px; }
-  .rc-step { flex-wrap: wrap; justify-content: center; gap: 4px 5px; padding: 11px 0 0; text-align: center; font-size: .78rem; }
+  .rc-step { display: grid; grid-template-columns: auto auto; justify-content: center; align-items: center; gap: 3px 5px; padding: 11px 0 0; font-size: .78rem; }
   .rc-badge { width: 17px; height: 17px; font-size: .64rem; }
   .rc-badge .ic { width: 11px; height: 11px; }
   .rc-full { display: none; } .rc-short { display: inline; }
-  .rc-best { flex-basis: 100%; margin: 0; padding: 0; font-size: .72rem; }
+  .rc-best { grid-column: 1 / -1; min-height: 1.2em; margin: 0; padding: 0; font-size: .72rem; line-height: 1.2; text-align: center; }
+  .rc-steps:has(.rc-best:not(:empty)) .rc-best:empty { display: block; } /* rows line up once any step has a score */
   .rc-row { gap: 10px; margin-top: 12px; }
   .rc-say { flex-basis: 100%; font-size: .88rem; }
   .rc-ctl { width: 100%; margin-left: 0; }

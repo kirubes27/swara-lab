@@ -6,7 +6,7 @@ import * as A from './theory-audio.js';
 import {
   mod12, isBlack, octaveOf, hzOf, above, nameOf, pcNote, SHARP_NAMES, FLAT_NAMES, BOTH_NAMES,
   SCALES, scaleNotes, tonicName, CHORDS, chordTones, chordName, identifyChord, inversionName, INTERVALS,
-  FIFTHS, keySignature, signatureText, PROGRESSIONS, progressionChords, voiceChord,
+  FIFTHS, keySignature, signatureText, camelotCode, PROGRESSIONS, progressionChords, voiceChord,
 } from './theory-core.js';
 import { Piano, seg, picker, field, controls, readout, playButton, Tempo, wheel, ic, noteLabel } from './theory-ui.js';
 
@@ -227,6 +227,7 @@ function keysDemo(host) {
   const head = h('h3', { class: 'th-keyname' });
   const sig = h('p', { class: 'th-sub' });
   const rel = h('p', { class: 'th-sub' });
+  const dj = h('p', { class: 'th-sub' });
   const chips = h('div', { class: 'th-chords' });
   const chordsOf = () => {
     const minor = sel.ring === 1;
@@ -273,12 +274,14 @@ function keysDemo(host) {
     head.textContent = name;
     sig.textContent = signatureText(s) + (pc === 6 && !minor ? ' (or G♭ major, 6 flats)' : '');
     rel.textContent = minor ? `Relative major: ${majName(majPc)} major. Same notes, different home.` : `Relative minor: ${minName(mod12(pc + 9))} minor. Same notes, different home.`;
+    const cam = camelotCode(pc, minor);
+    dj.replaceChildren('DJs call this key ', h('a', { href: '#theory/dj/harmonic' }, `${cam.n}${cam.letter}`), ' on the Camelot wheel.');
     chips.replaceChildren(...chordsOf().map(([rn, c]) => h('button', { type: 'button', class: 'th-chordchip', 'data-rn': rn, onclick: () => { A.silence(tag); playChord(c, soon(), 1.4); } },
       h('small', {}, rn), h('strong', {}, c.name))));
     playBtn.replaceChildren(ic('play', 14), minor ? 'Play i–iv–v–i' : 'Play I–IV–V–I');
   };
   host.append(h('div', { class: 'th-cof' }, h('div', { class: 'th-cof-wheel' }, w.el),
-    h('div', { class: 'th-cof-info' }, head, sig, rel,
+    h('div', { class: 'th-cof-info' }, head, sig, rel, dj,
       h('p', { class: 'th-flabel' }, 'Its six main chords sit side by side on the circle'), chips, playBtn)));
   update();
 }
@@ -311,7 +314,7 @@ function rhythmDemo(host, scope) {
     }));
   };
   const restart = () => { draw(); if (clock.running) { A.silence(tag); clock.div = per(); clock.start(); } };
-  const meterSeg = seg(Object.keys(METERS).map((m) => [m, m]), meter, (v) => { meter = v; subSeg.el.classList.toggle('is-off', v === '6/8'); for (const s of [1, 2, 3, 4]) subSeg.enable(s, v !== '6/8'); restart(); }, 'Time signature');
+  const meterSeg = seg(Object.keys(METERS).map((m) => [m, m]), meter, (v) => { meter = v; for (const s of [1, 2, 3, 4]) subSeg.enable(s, v !== '6/8'); restart(); }, 'Time signature');
   const subSeg = seg([[1, 'Beats'], [2, '8ths'], [3, 'Triplets'], [4, '16ths']], sub, (v) => { sub = v; restart(); }, 'Subdivision');
   btn.el.addEventListener('click', () => {
     if (clock.running) { clock.stop(); A.silence(tag); btn.set(false); [...pulses.children].forEach((el) => el.classList.remove('is-on')); return; }
@@ -367,8 +370,9 @@ function progressionsDemo(host, scope) {
     keySel.set(tonic);
     tempo.set(prog.bpm);
     build();
+    if (clock.running) { A.silence(tag); clock.start(); } // start the new progression from bar 1
   }, 'Progression');
-  const drumChk = h('input', { type: 'checkbox', checked: true, 'aria-label': 'Drums', onchange: (e) => { drums = e.target.checked; } });
+  const drumChk = h('input', { type: 'checkbox', checked: true, onchange: (e) => { drums = e.target.checked; } });
   btn.el.addEventListener('click', () => {
     if (clock.running) { clock.stop(); A.silence(tag); btn.set(false); [...chipsEl.children].forEach((el) => el.classList.remove('is-on')); return; }
     clock.start(); btn.set(true);
@@ -396,7 +400,7 @@ function singingDemo(host, scope) {
   const ladder = h('div', { class: 'th-ladder', role: 'group', 'aria-label': 'Scale degrees in your key' });
   const marker = h('div', { class: 'th-voice', 'aria-hidden': 'true' });
   const IDLE = ['Hear it, then sing it', 'Press Sing and your voice appears on the ladder.'];
-  const live = readout(...IDLE);
+  const live = readout(...IDLE, false);
   const rows = DEGREES.map((d) => {
     const b = h('button', { type: 'button', class: 'th-rung', style: `bottom:${(d.semis / 12) * 100}%`, onclick: () => playDeg(d) },
       h('strong', {}, d.deg), h('span', {}, d.sargam), h('span', { class: 'th-solfa' }, d.solfa), h('small', {}));
@@ -414,7 +418,7 @@ function singingDemo(host, scope) {
     idx.forEach((k, i) => { const t = t0 + i * 0.55; A.key(tonic + DEGREES[k].semis, t, { tag, dur: 0.6 }); A.at(t, () => flashRow(k, 480), tag); });
   };
   const keySel = picker(range(43, 67).map((m) => [m, noteLabel(m)]), tonic, (v) => { tonic = v; relabel(); if (drone) { drone.stop(); drone = A.drone(tonic); } }, 'Key note (Sa)');
-  const droneBtn = h('button', { type: 'button', class: 'btn', 'aria-pressed': 'false' }, ic('drone', 16), 'Drone');
+  const droneBtn = h('button', { type: 'button', class: 'btn', 'aria-pressed': 'false', 'aria-label': 'Drone on the key note' }, ic('drone', 16), 'Drone');
   droneBtn.addEventListener('click', () => {
     if (drone) { drone.stop(); drone = null; } else drone = A.drone(tonic);
     droneBtn.classList.toggle('on', !!drone); droneBtn.setAttribute('aria-pressed', String(!!drone));

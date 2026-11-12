@@ -329,9 +329,9 @@ export function renderDeviceCheck(container, { title = 'Check this device' } = {
       echoCancellation: ts.echoCancellation, noiseSuppression: ts.noiseSuppression, autoGainControl: ts.autoGainControl, latency: ts.latency };
     const where = [info.label, khz(info.trackSr || info.sr)].filter(Boolean).join(' · ');
     const quiet = Math.max(0.004, (mic.gate || 0.0024) * 3); // comfortably above the level the pitch tracker ignores
-    const bar = h('i'), meter = h('div', { class: 'dc-meter quiet' }, bar);
+    const bar = h('i'), meter = h('div', { class: 'dc-meter dc-quiet' }, bar);
     const note = h('span', { class: 'dc-note' }, '–'), count = h('span', { class: 'dc-count' }, MIC_SECS + ' s');
-    rMic.extra.replaceChildren(h('div', { class: 'dc-live' }, meter, note, count));
+    rMic.extra.replaceChildren(h('div', { class: 'dc-level' }, meter, note, count));
     rMic.set('live', 'Sing or hum a note', null, where);
     let frames = 0, maxL = 0, lastNote = 0, done = false;
     const voiced = [], names = new Map();
@@ -341,7 +341,7 @@ export function renderDeviceCheck(container, { title = 'Check this device' } = {
       if (lv > maxL) maxL = lv;
       const db = lv > 0 ? 20 * Math.log10(lv) : -120;
       bar.style.transform = `scaleX(${Math.min(1, Math.max(0, (db + 60) / 54)).toFixed(3)})`;
-      meter.className = 'dc-meter' + (lv < quiet ? ' quiet' : lv > LOUD ? ' loud' : '');
+      meter.className = 'dc-meter' + (lv < quiet ? ' dc-quiet' : lv > LOUD ? ' dc-loud' : '');
       if (f.hz > 0) {
         const nm = westernName(hzToMidi(f.hz));
         voiced.push(lv); names.set(nm, (names.get(nm) || 0) + 1);
@@ -383,11 +383,11 @@ export function renderDeviceCheck(container, { title = 'Check this device' } = {
     const dots = Array.from({ length: CLICKS }, () => h('i'));
     rDelay.extra.replaceChildren(h('div', { class: 'dc-dots', 'aria-hidden': 'true' }, ...dots));
     rDelay.set('live', 'Listening… keep the room quiet');
-    const r = await measureDelay({ onProgress: (k) => dots.forEach((d, i) => d.classList.toggle('on', i < k)), cancelled: gone });
+    const r = await measureDelay({ onProgress: (k) => dots.forEach((d, i) => d.classList.toggle('dc-on', i < k)), cancelled: gone });
     rep.delay = r;
     lock(false);
     if (r.reason === 'cancelled' || destroyed) return;
-    dots.forEach((d, i) => { d.classList.remove('on'); d.classList.add(r.hits && r.hits[i] ? 'hit' : 'miss'); });
+    dots.forEach((d, i) => { d.classList.remove('dc-on'); d.classList.add(r.hits && r.hits[i] ? 'dc-hit' : 'dc-miss'); });
     if (r.ok) rDelay.set('ok', `Round trip ${Math.round(r.rt * 1000)} ms · saved`, 'Measure again if you change speakers.', `Extra latency compensation: ${r.latencyMs} ms`);
     else {
       const [st, text, more] = DELAY_FAIL[r.reason] || DELAY_FAIL.error;
@@ -397,7 +397,7 @@ export function renderDeviceCheck(container, { title = 'Check this device' } = {
   }
 
   // echo cancellation
-  const echo = () => rEcho.set('info', settings.headphones ? 'Off: you said you sing with headphones' : 'On: for speakers, the song is removed from the mic', 'Change it in Settings below.');
+  const echo = () => rEcho.set('info', settings.headphones ? 'Off: you said you sing with headphones' : 'On: for speakers, the song is removed from the mic', 'Change it with "I sing with headphones" under Audio.');
   echo();
 
   // OS tips
@@ -429,7 +429,7 @@ export function renderDeviceCheck(container, { title = 'Check this device' } = {
 // One row: status tile, title, status line, advice, a faint detail line, room for live content.
 function row(key, title, topic) {
   const ic = h('span', { class: 'li-ic dc-ic' });
-  const main = h('small', { class: 'dc-main' }), sub = h('small', { class: 'dc-sub' }), meta = h('small', { class: 'dc-meta' });
+  const main = h('small', { class: 'dc-main', 'aria-live': 'polite' }), sub = h('small', { class: 'dc-sub' }), meta = h('small', { class: 'dc-meta' });
   const extra = h('div', { class: 'dc-extra' }), end = h('span', { class: 'li-end' });
   const el = h('div', { class: 'li dc-row', 'data-check': key }, ic, h('div', { class: 'li-text' }, h('strong', {}, title), main, sub, meta, extra), end);
   const fill = (node, v) => node.replaceChildren(...(v == null || v === '' ? [] : [].concat(v)));
@@ -437,7 +437,7 @@ function row(key, title, topic) {
     el, extra, end,
     set(state, text, more, detail) {
       el.dataset.state = state;
-      ic.className = 'li-ic dc-ic ' + state;
+      ic.className = 'li-ic dc-ic dc-' + state;
       ic.replaceChildren(state === 'busy' ? h('span', { class: 'dc-spin' }) : GLYPHS[state] ? GLYPHS[state]() : icon(topic, 18));
       if (STATE_LABEL[state]) { ic.setAttribute('role', 'img'); ic.setAttribute('aria-label', STATE_LABEL[state]); ic.removeAttribute('aria-hidden'); }
       else { ic.removeAttribute('role'); ic.removeAttribute('aria-label'); ic.setAttribute('aria-hidden', 'true'); }
@@ -474,7 +474,7 @@ function gpuTip(b) {
 // Plain-text summary, for pasting into a message or an issue when something doesn't work.
 async function copyReport(rep) {
   const c = audioCtx();
-  if (!c.outputLatency) await sleep(300); // a context that just started reports its latency a moment later
+  if ('outputLatency' in c && !c.outputLatency) await sleep(300); // a context that just started reports it a moment later
   const text = reportText(rep, c);
   const show = () => sheet('Device details', h('textarea', { class: 'dc-report', readonly: true, rows: 14, spellcheck: 'false', onfocus: (e) => e.target.select() }, text));
   if (navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(text).then(() => toast('Details copied', 'good'), show);
