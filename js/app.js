@@ -6,7 +6,7 @@ import { saHzFrom, westernName, hzToMidi, midiToHz, kattaiName, kaliSafedName, S
 import { EXERCISES, WARMUP_ROUTINE, exText } from './exercises.js';
 import { ExercisePlayer } from './practice.js';
 import { SongStudio, gpuChecked } from './song.js';
-import { RangeFinder } from './range.js';
+import { RangeFinder, rangeStatus, voiceType, spanText, agoText, keyboard, RANGE_DUE_DAYS } from './range.js';
 import { FreeSing } from './free.js';
 import { h, toast, ensureMic } from './ui.js';
 import { icon } from './icons.js';
@@ -117,6 +117,23 @@ function signatureSVG() {
 function tile({ href, ic, title, sub, hero = false, tip }) {
   return h('a', { class: 'tile' + (hero ? ' hero' : ''), href, title: tip }, h('span', { class: 't-ic' }, icon(ic, 20)), h('span', { class: 't-body' }, h('span', { class: 't-title' }, title), h('span', { class: 't-sub' }, sub)), h('span', { class: 't-go' }, icon('chevron', 18)));
 }
+// Today's range card: the saved range on a keyboard, a rough voice type and when it was checked.
+function rangeCard(rs) {
+  if (!rs.tested) return h('section', { class: 'card vr-card', 'aria-labelledby': 'vr-title' },
+    h('div', { class: 'vr-head' }, h('div', {}, h('h2', { class: 'vr-title', id: 'vr-title' }, 'Your range'), h('div', { class: 'vr-value' }, 'Not checked yet')),
+      h('a', { class: 'btn small', href: '#practice/range' }, 'Find my range')),
+    h('p', { class: 'vr-meta' }, 'Two minutes. Exercises and song keys then fit your voice.'),
+    keyboard(null, null, { mini: true }));
+  const when = rs.days != null ? `checked ${agoText(rs.days)}` : null;
+  return h('section', { class: 'card vr-card' + (rs.due ? ' due' : ''), 'aria-labelledby': 'vr-title' },
+    h('div', { class: 'vr-head' },
+      h('div', {}, h('h2', { class: 'vr-title', id: 'vr-title' }, 'Your range'), h('div', { class: 'vr-value' }, `${westernName(rs.lo)} – ${westernName(rs.hi)}`)),
+      h('a', { class: 'btn small' + (rs.due ? ' primary' : ''), href: '#practice/range' }, 'Check again')),
+    h('p', { class: 'vr-meta' }, [voiceType(rs.lo, rs.hi), spanText(rs.lo, rs.hi), when].filter(Boolean).join(' · ')),
+    rs.due ? h('p', { class: 'vr-due' }, h('span', { class: 'vr-due-dot', 'aria-hidden': 'true' }),
+      rs.days != null ? `It's been ${agoText(rs.days).replace(/ ago$/, '')}. Voices change with practice, so a quick check keeps your keys right.` : 'Voices change with practice, so a quick check now and then keeps your keys right.') : null,
+    keyboard(rs.lo, rs.hi, { mini: true }));
+}
 function renderToday() {
   const root = $('#page-today'); root.innerHTML = '';
   const st = streak(), today = minutesOn(dayKey(new Date()));
@@ -130,20 +147,32 @@ function renderToday() {
     tile({ href: '#practice/warmup', ic: 'breath', title: 'Warm up', sub: '8 minutes. Breath, sirens, scales, slides.', hero: true }),
     tile({ href: '#songs', ic: 'songs', tip: song ? song.title : null, title: song ? 'Continue: ' + song.title.replace(/\s*\(.*\)\s*$/, '') : 'Learn a song', sub: song ? 'Loop a line, slow it down, sing against the original.' : 'Import any song and sing against its melody.' }),
     tile({ href: '#practice/free', ic: 'wave', title: 'Free sing', sub: 'Sing anything and see your pitch live.' })));
-  if (!settings.saChosen) root.append(h('div', { class: 'callout row wrap spread', style: 'margin-top:16px' },
+  // Your range: an invitation near the top until the first check ('Not now' hides it for two weeks),
+  // then a card further down with the range and its date, which asks for a new check every month.
+  const rs = rangeStatus();
+  const snoozed = !!settings.rangeSnooze && new Date(settings.rangeSnooze) > new Date();
+  if (!rs.tested && !snoozed) root.append(h('div', { class: 'callout row wrap spread', style: 'margin-top:16px' },
     h('div', {}, h('strong', {}, 'Find your range first'), h('p', { class: 'small', style: 'margin:2px 0 0' }, 'Two minutes. It sets a comfortable key for every exercise and lets songs suggest a key that fits you.')),
-    h('a', { class: 'btn primary', href: '#practice/range' }, 'Find my range')));
+    h('div', { class: 'row' },
+      h('button', { class: 'btn ghost', onclick: () => { saveSettings({ rangeSnooze: new Date(Date.now() + 14 * 864e5).toISOString() }); renderToday(); } }, 'Not now'),
+      h('a', { class: 'btn primary', href: '#practice/range' }, 'Find my range'))));
   const steps = [
     { id: 'warm', ic: 'breath', title: 'Warm-up', mins: 8, href: '#practice/warmup', done: doneToday((r) => r.type === 'drill' && WARMUP_ROUTINE.includes(r.id)), what: 'Gets the voice moving before anything demanding.' },
     { id: 'match', ic: 'target', title: 'Pitch matching', mins: 2, href: '#practice/pitchMatch', done: doneToday((r) => r.id === 'pitchMatch'), what: 'Hear a note, sing it back. Trains the ear-to-voice link behind most off-key singing.' },
     { id: 'focus', ic: 'sparkle', title: exText(EXERCISES[fd.id], settings).name, mins: 3, href: '#practice/' + fd.id, done: doneToday((r) => r.id === fd.id), what: fd.why ? 'Because ' + fd.why + '.' : 'Today\'s technique focus.' },
     { id: 'song', ic: 'songs', title: song ? song.title : 'A song', mins: 10, href: '#songs', done: doneToday((r) => r.type === 'song'), what: 'Two or three lines: listen at 0.75×, sing along, then try it muted.' },
   ];
+  // a month after the last range check, a new one joins the plan, right after the warm-up (a warm voice reads truer)
+  const gap = rs.prev ? Math.round((new Date(dayKey(new Date()) + 'T12:00') - new Date(rs.prev.d + 'T12:00')) / 864e5) : 0;
+  const rangeDone = rs.tested && rs.days === 0 && gap >= RANGE_DUE_DAYS; // today's check answered a reminder
+  if (rs.tested && (rs.due || rangeDone)) steps.splice(1, 0, { id: 'range', ic: 'keys', title: 'Range check', mins: 2, href: '#practice/range', done: rangeDone,
+    what: rangeDone ? 'Done. Your range and song keys are up to date.' : `${rs.days != null ? `Last checked ${agoText(rs.days)}. ` : ''}Voices change with practice; this keeps song keys and exercises right for you.` });
   root.append(h('div', { class: 'section' }, h('h2', {}, 'Suggested for today'), h('span', { class: 'small muted' }, 'About 20 minutes · all optional')));
   root.append(h('div', { class: 'list' }, ...steps.map((s) => h('a', { href: s.href, class: s.done ? 'done' : '' },
     h('span', { class: 'li-ic' }, icon(s.done ? 'check' : s.ic, 18)),
     h('span', { class: 'li-text' }, h('strong', {}, s.title), h('small', {}, s.what)),
     h('span', { class: 'li-end' }, s.mins + ' min', icon('chevron', 16))))));
+  if (rs.tested || snoozed) root.append(rangeCard(rs));
   const [tt, td] = TIPS[(new Date().getDate() + new Date().getMonth()) % TIPS.length];
   root.append(h('div', { class: 'grid2', style: 'margin-top:16px' },
     h('div', { class: 'card', style: 'margin:0' }, h('div', { class: 'stats' },

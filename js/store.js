@@ -21,6 +21,9 @@ export const DEFAULT_SETTINGS = {
   latencyMs: 0,         // extra user calibration
   rangeLowMidi: null,
   rangeHighMidi: null,
+  rangeTestedAt: null,  // when both steps of the range check were last done (ISO time)
+  rangeHistory: [],     // [{ d: 'YYYY-MM-DD', lo, hi }], one per day, the last 24
+  rangeSnooze: null,    // 'Not now' on Today's range invitation hides it until this time
   octaveFree: true,
   showOrnaments: false, // song lines: plain notes vs notes with ornament symbols
   headphones: false,     // with speakers, echo cancellation removes the song from the mic
@@ -63,6 +66,15 @@ export function logActivity(rec) {
   }
   if (rec.weak) for (const [k, v] of Object.entries(rec.weak)) progress.weak[k] = (progress.weak[k] || 0) * 0.85 + v;
   lsSet('progress', progress);
+}
+// A range saved before checks were dated: take the date from the practice log, where the check was logged.
+if (settings.rangeLowMidi != null && settings.rangeHighMidi != null && !settings.rangeTestedAt) {
+  const last = progress.log.filter((r) => r.type === 'range').pop();
+  if (last) {
+    settings.rangeTestedAt = last.date;
+    if (!(settings.rangeHistory || []).length) settings.rangeHistory = [{ d: dayKey(last.date), lo: settings.rangeLowMidi, hi: settings.rangeHighMidi }];
+    lsSet('settings', settings);
+  }
 }
 export function resetProgress() { progress.log = []; progress.swara = {}; progress.weak = {}; lsSet('progress', progress); }
 
