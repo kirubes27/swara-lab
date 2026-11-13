@@ -214,7 +214,12 @@ export class LyricsPanel {
   // { offset, times: [song time per non-empty line] | null, user: true when set by hand }
   get timing() {
     if (!this.song) return { offset: 0, times: null };
-    const all = (this.song.lyricsTiming = this.song.lyricsTiming || {});
+    const song = this.song, all = (song.lyricsTiming = song.lyricsTiming || {});
+    if ('lyricsOffset' in song || 'lyricsOffsetUser' in song) {
+      // from the version with one shift for every source: keep a shift set by hand for both sources
+      if (song.lyricsOffsetUser) for (const src of ['youtube', 'audio']) if (!all[src]) all[src] = { offset: song.lyricsOffset || 0, times: null, user: true };
+      delete song.lyricsOffset; delete song.lyricsOffsetUser;
+    }
     return all[this.s.source] || (all[this.s.source] = { offset: 0, times: null, user: false });
   }
   setTiming(patch) { Object.assign(this.timing, patch); this.ver = (this.ver || 0) + 1; upsertSong(this.song); }
@@ -248,7 +253,7 @@ export class LyricsPanel {
   }
 
   async load(song, { search = true } = {}) {
-    this.song = song; this.data = null; this.cur = -2;
+    this.song = song; this.data = null; this.cur = -2; this.picking = false; this.removed = false;
     const token = (this.token = (this.token || 0) + 1);
     if (!song) { this.state = 'idle'; this.render(); return; }
     this.state = 'loading'; this.render();
@@ -274,10 +279,11 @@ export class LyricsPanel {
     }
   }
   use(d, { save = true } = {}) {
-    this.data = d; this.cur = -2; this.removed = false; this.ver = (this.ver || 0) + 1;
+    this.data = d; this.cur = -2; this.removed = false; this.picking = false; this.ver = (this.ver || 0) + 1;
     if (save) {
       idbPut('melody', this.song.id + ':lyrics', d);
-      this.song.lyricsTiming = {}; upsertSong(this.song); // new lyrics: time them afresh for every source
+      this.song.lyricsTiming = {}; delete this.song.lyricsOffset; delete this.song.lyricsOffsetUser;
+      upsertSong(this.song); // new lyrics: time them afresh for every source
     }
     this.state = d.synced ? 'synced' : (d.plain && d.plain.some(Boolean) ? 'plain' : 'none');
     if (d.synced) this.realign();

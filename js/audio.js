@@ -62,7 +62,7 @@ export class Mic {
     this.src.connect(this.hpf[0]); this.hpf[0].connect(this.hpf[1]); this.hpf[1].connect(this.analyser);
     this.buf = new Float32Array(this.analyser.fftSize);
     this.yin = new Yin(c.sampleRate, { minHz: this.lowHz * 0.94, maxHz: this.highHz * 1.06, threshold: 0.15 });
-    this.acc = null; this.pend = null; this.floor = 0;
+    this.acc = null; this.pend = null; this.opend = null; this.floor = 0; this.voicedSince = 0;
     this.running = true;
     const loop = () => {
       if (!this.running) return;
@@ -86,21 +86,25 @@ export class Mic {
     const level = rms(this.buf);
     this.level = level;
     const now = performance.now();
-    // background level: drops at once to quiet moments, rises only slowly (~10 s), so a long
-    // sustained note is never mistaken for background noise
-    // Holding a note: for 150 ms after a pitch was accepted, a quieter or less clearly periodic frame
+    // Holding a note: for 150 ms after a clearly sung frame, a quieter or less clearly periodic frame
     // near that pitch still counts (breathy singing, or the voice partly removed by echo cancellation).
+    // Only clear frames renew the hold, so a faint echo of the guide can't keep a note going.
     const holding = this.acc && now - this.acc.t < 150;
-    const need = holding ? Math.max(this.gate * 0.7, this.floor * 1.4) : Math.max(this.gate, this.floor * 2);
-    let hz = 0, clarity = 0;
+    const strictNeed = Math.max(this.gate, this.floor * 2);
+    const need = holding ? Math.max(this.gate * 0.7, this.floor * 1.4) : strictNeed;
+    let hz = 0, clarity = 0, strict = false;
     if (level > need) {
       const r = this.yin.detect(this.buf, holding ? { hz: this.acc.hz, maxD: 0.4 } : null);
-      if (r && r.clarity > (holding ? 0.58 : 0.65) && r.hz >= this.lowHz * 0.94 && r.hz <= this.highHz * 1.06) { hz = r.hz; clarity = r.clarity; }
+      if (r && r.clarity > (holding ? 0.58 : 0.65) && r.hz >= this.lowHz * 0.94 && r.hz <= this.highHz * 1.06) {
+        hz = r.hz; clarity = r.clarity; strict = level > strictNeed && r.clarity > 0.65 && !r.hinted;
+      }
     }
-    // background level: drops at once to quiet moments, rises only slowly (~10 s) and never while a
-    // note is being sung, so a long held note is never mistaken for background noise
+    // background level: drops at once to quiet moments and rises only slowly (~10 s). It doesn't rise
+    // during the first 6 s of an unbroken pitch, so a long held note isn't taken for background,
+    // while a hum or drone that goes on and on is.
+    if (hz) { if (!this.voicedSince) this.voicedSince = now; } else this.voicedSince = 0;
     if (!this.floor || level < this.floor) this.floor = level;
-    else if (!hz) this.floor += (level - this.floor) * 0.0015;
+    else if (!hz || now - this.voicedSince > 6000) this.floor += (level - this.floor) * 0.0015;
     // Jump confirmation against the recent context (median of what was sung in the last 1.5 s):
     // a leap of more than ~3.5 semitones is only believed once it repeats (2 frames; ~6 frames for
     // an octave or more). Real leaps survive with a tiny delay; blips from consonants, drum hits or
@@ -112,15 +116,19 @@ export class Mic {
       if (this.ctxp.length >= 5) { const v = this.ctxp.map((p) => p.hz).sort((a, b) => a - b); ref = v[v.length >> 1]; }
       else if (this.acc && now - this.acc.t < 160) ref = this.acc.hz;
       let jump = ref ? Math.abs(1200 * Math.log2(hz / ref)) : 0;
-      if (ref && Math.abs(jump - 1200) < 60 && !(this.pend && Math.abs(1200 * Math.log2(hz / this.pend.hz)) < 80)) {
-        hz = hz > ref ? hz / 2 : hz * 2; jump = Math.abs(1200 * Math.log2(hz / ref)); // a one-off octave slip of the detector
-      }
+      if (ref && Math.abs(jump - 1200) < 60) {
+        // exactly an octave away: a lone reading is an octave slip of the detector and is folded back;
+        // the same octave ~6 frames in a row (0.1 s) is a real leap and starts a new context
+        if (this.opend && Math.abs(1200 * Math.log2(hz / this.opend.hz)) < 80) this.opend.n++; else this.opend = { hz, n: 1 };
+        if (this.opend.n >= 6) { this.opend = null; this.pend = null; this.ctxp = []; jump = 0; }
+        else { hz = hz > ref ? hz / 2 : hz * 2; jump = Math.abs(1200 * Math.log2(hz / ref)); }
+      } else this.opend = null;
       if (!ref || jump < 350) { out = hz; this.pend = null; }
       else if (this.pend && Math.abs(1200 * Math.log2(hz / this.pend.hz)) < 80) {
         if (++this.pend.n >= (jump > 900 ? 6 : 2)) { out = hz; this.pend = null; this.ctxp = []; } // a confirmed leap starts a new context
       } else this.pend = { hz, n: 1 };
-      if (out) { this.acc = { hz: out, t: now }; this.ctxp.push({ hz: out, t: now }); }
-    } else this.pend = null;
+      if (out) { if (strict) this.acc = { hz: out, t: now }; this.ctxp.push({ hz: out, t: now }); }
+    } else { this.pend = null; this.opend = null; }
     this.last = { t: now, hz: out, clarity, level };
     for (const fn of this.listeners) fn(this.last);
   }
@@ -134,16 +142,18 @@ export class Mic {
 
 export const mic = new Mic();
 
-// Add a pitch frame {t, c} (c = cents, NaN = unvoiced) to a take. A dropout of up to 0.12 s between
+// Add a pitch frame {t, c} (c = cents, NaN = unvoiced) to a take. A dropout of up to 0.13 s between
 // two frames of the same note (within 80 cents) is filled in, so a sustained note isn't shown
-// or scored as broken by a few lost frames.
+// or scored as broken by a few lost frames. Only forward in time: after a seek nothing is filled.
 export function pushFrame(frames, f) {
   if (!isNaN(f.c) && frames.length) {
     let k = frames.length - 1;
-    while (k >= 0 && isNaN(frames[k].c) && f.t - frames[k].t < 0.13) k--;
-    if (k >= 0 && k < frames.length - 1 && !isNaN(frames[k].c) && f.t - frames[k].t <= 0.13 && Math.abs(f.c - frames[k].c) < 80) {
-      const a = frames[k];
-      for (let j = k + 1; j < frames.length; j++) frames[j].c = a.c + ((f.c - a.c) * (frames[j].t - a.t)) / (f.t - a.t);
+    while (k >= 0 && isNaN(frames[k].c) && frames[k].t <= f.t && f.t - frames[k].t < 0.13) k--;
+    if (k >= 0 && k < frames.length - 1 && !isNaN(frames[k].c)) {
+      const a = frames[k], gap = f.t - a.t;
+      if (gap > 0 && gap <= 0.13 && Math.abs(f.c - a.c) < 80) {
+        for (let j = k + 1; j < frames.length; j++) frames[j].c = a.c + ((f.c - a.c) * (frames[j].t - a.t)) / gap;
+      }
     }
   }
   frames.push(f);

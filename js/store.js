@@ -34,7 +34,7 @@ if ((settings.styleVersion || 0) === 2) { // v3: quality levels renamed ('best' 
   settings.styleVersion = 3; lsSet('settings', settings);
 }
 if (!settings.styleVersion) { // v2: general style became the default (Indian style is opt-in)
-  settings.notation = 'western'; settings.styleVersion = 4;
+  settings.notation = 'western'; settings.styleVersion = 3; // and on through the steps below
   if (settings.thaat) delete settings.thaat;
   lsSet('settings', settings);
 }

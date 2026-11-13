@@ -95,7 +95,7 @@ export class Yin {
       d[tau] = running > 0 ? d[tau] * tau / running : 1;
     }
     // first dip under the threshold, followed down to its local minimum
-    let tau = -1;
+    let tau = -1, hinted = false;
     for (let t = tauMin; t < tauMax; t++) {
       if (d[t] < this.threshold) {
         while (t + 1 < tauMax && d[t + 1] < d[t]) t++;
@@ -114,7 +114,8 @@ export class Yin {
       const tc = this.sr / hint.hz, lo = Math.max(tauMin + 1, Math.floor(tc / 1.1)), hi = Math.min(tauMax - 3, Math.ceil(tc * 1.1));
       let bh = -1, bd = Infinity;
       for (let t = lo; t <= hi; t++) if (d[t] <= d[t - 1] && d[t] <= d[t + 1] && d[t] < bd) { bd = d[t]; bh = t; }
-      if (bh > 0 && bd <= (hint.maxD || 0.4) && (tau < 0 || bd <= d[tau] + 0.08)) tau = bh; // keep the note, or fix an octave slip
+      // only when the normal search found no clean dip: a clear reading elsewhere (a real leap) wins
+      if (bh > 0 && bd <= (hint.maxD || 0.4) && (tau < 0 || d[tau] > this.threshold)) { tau = bh; hinted = true; }
     }
     if (tau < 0) return null;
     // a "pitch" at the very edge of the search range is noise or rumble, not a voice
@@ -127,7 +128,7 @@ export class Yin {
       if (den !== 0) betterTau = tau + (s2 - s0) / den;
     }
     const hz = this.sr / betterTau;
-    return { hz, clarity: 1 - d[tau] };
+    return { hz, clarity: 1 - d[tau], hinted };
   }
 }
 

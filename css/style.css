@@ -567,6 +567,7 @@ svg.trend .trend-dot { fill: var(--accent); stroke: var(--surface); stroke-width
   .tabbar a.active { color: var(--accent); }
   .tabbar svg { width: 23px; height: 23px; }
   main { padding: 24px 16px 110px; }
+  .coach-bar { scroll-margin-bottom: calc(80px + env(safe-area-inset-bottom)); } /* clear of the tab bar */
   h1 { font-size: 2rem; } .hello h1 { font-size: 2.2rem; }
   .signature { position: static; width: 100%; height: 72px; margin: 4px 0 -6px; }
   .split, .grid2, .lower { grid-template-columns: minmax(0, 1fr); }

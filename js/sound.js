@@ -205,18 +205,27 @@ export class Follower {
   constructor() { this.v = null; this.vol = 0.35; }
   set(hz) {
     const c = audioCtx();
+    const timbre = this.timbre || settings.guideTimbre;
     if (!this.v) {
-      const o = c.createOscillator(); const w = guideWave(c, this.timbre || settings.guideTimbre); if (w) o.setPeriodicWave(w); else o.type = 'sine';
-      const lp = c.createBiquadFilter(); lp.type = 'lowpass'; lp.frequency.value = (this.timbre || settings.guideTimbre) === 'reed' ? 2200 : 1700;
+      const o = c.createOscillator();
+      const lp = c.createBiquadFilter(); lp.type = 'lowpass';
       const g = c.createGain(); g.gain.value = 0;
       o.connect(lp); lp.connect(g); g.connect(masterOut()); o.start();
-      this.v = { o, g };
+      this.v = { o, lp, g, timbre: null, on: false };
+    }
+    if (this.v.timbre !== timbre) { // first use, or the sound was changed in Settings since
+      const w = guideWave(c, timbre); if (w) this.v.o.setPeriodicWave(w); else this.v.o.type = 'sine';
+      this.v.lp.frequency.value = timbre === 'reed' ? 2200 : 1700;
+      this.v.timbre = timbre;
     }
     const t = c.currentTime;
     if (hz > 0) {
-      this.v.o.frequency.setTargetAtTime(hz, t, 0.006);
-      this.v.g.gain.setTargetAtTime(this.vol * 0.6, t, 0.03);
-    } else this.v.g.gain.setTargetAtTime(0, t, 0.04);
+      // a phrase starts on its own pitch (no glide up from the last one) and fades in quickly
+      if (this.v.on) this.v.o.frequency.setTargetAtTime(hz, t, 0.006);
+      else { this.v.o.frequency.cancelScheduledValues(t); this.v.o.frequency.setValueAtTime(hz, t); }
+      this.v.g.gain.setTargetAtTime(this.vol * 0.6, t, 0.01);
+      this.v.on = true;
+    } else { this.v.g.gain.setTargetAtTime(0, t, 0.04); this.v.on = false; }
   }
   stop() {
     if (!this.v) return;

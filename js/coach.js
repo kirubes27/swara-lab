@@ -136,7 +136,7 @@ export function analyzeTake({ frames, refAt, start, end, tol = 35, octaveFree = 
 
 function weaknessVector(r) {
   const w = {};
-  if (r.hiBias != null && r.hiBias < -25) w.highFlat = 1;
+  if (r.hiBias != null && r.hiBias < -25 && r.hiBias - r.bias < -20) w.highFlat = 1; // as in tipsFor
   if (r.wobble != null && r.wobble > 22) w.wobble = 1;
   if (r.ornRatio != null && r.ornRatio < 0.5) w.ornaments = 1;
   if (r.scoop > 0.35) w.scoop = 1;

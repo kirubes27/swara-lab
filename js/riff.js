@@ -79,6 +79,7 @@ export class RiffCoach {
     this.applySoon();
     this.renderHead();
     this.renderOut();
+    requestAnimationFrame(() => this.showBar());
   }
 
   close() {
@@ -235,6 +236,7 @@ export class RiffCoach {
       this.stopping = false;
       pl.play();
       if (reveal) this.reveal();
+      this.showBar();
     } finally {
       this.busy = false;
       if (this.active) this.syncControls();
@@ -318,6 +320,16 @@ export class RiffCoach {
     const mute = !!(playing && this.step === 'memory' && t >= this.span.a - 0.08 && t <= this.win.b + 0.3);
     if (mute !== this.muted && pl) { this.muted = mute; pl.mute(mute); }
     this.syncCounter();
+  }
+  // On a phone the bar can end up under the fixed tab bar: scroll it into view (its scroll margin
+  // keeps it clear of the tab bar).
+  showBar() {
+    const bar = this.s.coachBar;
+    if (!this.active || !bar || bar.hidden || !bar.getBoundingClientRect) return;
+    const tb = document.querySelector('.tabbar');
+    const limit = tb && getComputedStyle(tb).display !== 'none' ? tb.getBoundingClientRect().top : window.innerHeight;
+    const r = bar.getBoundingClientRect();
+    if (r.bottom > limit - 4 || r.top < 0) bar.scrollIntoView({ block: 'nearest', behavior: matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth' });
   }
   reveal() {
     const c = this.s.lane && this.s.lane.c;

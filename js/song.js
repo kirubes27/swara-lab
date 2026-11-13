@@ -130,19 +130,24 @@ class AudioPlayer {
   setGate(g) { if (g !== this.gate) { this.gate = g; if (this.stems) delete this.stems.vocals; } }
   async setTranspose(st) { this.st0 = st; return this.rebuild(); }
   async setSound(mode) { this.mode0 = mode; return this.rebuild(); }
-  async rebuild() {
-    const st = this.st0 ?? this.st ?? 0, mode = this.vocals ? (this.mode0 || 'mix') : 'mix';
-    const want = mode + '|' + st;
-    this.target = want;
-    if (want === (this.cur || 'mix|0')) return;
-    let url = this.url, f = Math.pow(2, st / 12);
+  wanted() { return (this.vocals ? (this.mode0 || 'mix') : 'mix') + '|' + (this.st0 ?? this.st ?? 0); }
+  // One swap at a time: each call waits for the one before and then works towards the latest choice,
+  // so quick repeated clicks can't run two swaps at once (that lost the playback position).
+  rebuild() {
+    const run = () => this.swap();
+    return (this.queue = (this.queue || Promise.resolve()).then(run, run));
+  }
+  async swap() {
+    const want = this.wanted();
+    if (this.dead || want === (this.cur || 'mix|0')) return;
+    const [mode, sts] = want.split('|'), st = +sts, f = Math.pow(2, st / 12);
+    let url = this.url;
     if (want !== 'mix|0') {
       let src = await this.decoded();
-      if (this.target !== want || this.dead) return;
       if (mode !== 'mix') src = await this.stemBuffer(mode);
-      if (this.target !== want || this.dead) return;
+      if (this.wanted() !== want || this.dead) return; // a newer choice is queued behind this one
       if (st) src = await renderRate(src, f, Math.min(44100, src.sampleRate));
-      if (this.target !== want || this.dead) return; // superseded by a newer choice
+      if (this.wanted() !== want || this.dead) return;
       if (this.shiftUrl) URL.revokeObjectURL(this.shiftUrl);
       url = this.shiftUrl = URL.createObjectURL(audioBufferToWav(src));
     }
@@ -150,7 +155,7 @@ class AudioPlayer {
     this.pause();
     this.factor = st ? f : 1; this.a.src = url;
     this.st = st; this.cur = want;
-    await new Promise((res) => this.a.addEventListener('loadedmetadata', res, { once: true }));
+    await new Promise((res) => { this.a.addEventListener('loadedmetadata', res, { once: true }); this.a.addEventListener('error', res, { once: true }); });
     this.setRate(this.r); this.seek(t);
     if (was) this.play();
   }
@@ -322,7 +327,6 @@ const MODES = [
 const SPEEDS = [0.5, 0.6, 0.75, 0.85, 1];
 const SOUNDS = [['mix', 'Original'], ['vocals', 'Voice only'], ['karaoke', 'Backing track']];
 const fmtSpeed = (v) => (v === 1 ? '1×' : v + '×');
-const GUIDE_LEAD = 0.07; // seconds
 const signed = (x) => (x > 0 ? '+' : x < 0 ? '−' : '') + Math.abs(Math.round(x));
 const pct = (x) => Math.round(x * 100) + '%';
 
@@ -397,6 +401,9 @@ export class SongStudio {
     this.buildTransport();
     this.renderFeedback(null);
     window.addEventListener('keydown', (e) => this.key(e));
+    // how focus arrived decides who gets Space: Chrome marks a clicked button :focus-visible once a key
+    // is pressed, so this is read when focus arrives, not at the keypress
+    document.addEventListener('focusin', (e) => { this.kbFocus = !!(e.target.matches && e.target.matches(':focus-visible')); }, true);
   }
 
   buildTransport() {
@@ -446,7 +453,11 @@ export class SongStudio {
       { el: h('label', { class: 'menu-switch' }, h('span', { class: 'mi-text' }, h('span', {}, 'Headphones'), h('small', {}, 'On when you listen with headphones: cleaner tracking')), hp) },
     ]);
   }
-  setGuide(on) { this.guideOn = !!on; if (!this.guideOn) this.follower.set(0); this.syncTransport(); }
+  setGuide(on, auto = false) {
+    this.guideOn = !!on; if (!auto) this.guideAuto = false; // switched by hand: modes leave it alone
+    if (!this.guideOn) this.follower.set(0);
+    this.syncTransport();
+  }
   async setSound(mode) {
     if (mode !== 'mix' && !this.canStems()) {
       toast(this.player && this.player.kind === 'audio' ? 'Analyse the song first. That step separates the voice from the music.' : this.song && this.song.hasCopy ? 'Switch the source to the recorded copy to hear the voice or the backing on their own.' : 'Voice only and backing need the song\'s audio: import a file, or capture the YouTube song once.', 'info', 6000);
@@ -466,8 +477,8 @@ export class SongStudio {
     this.mode = m;
     this.player && this.player.mute(m === 'muted');
     if (!quiet) {
-      if (m === 'muted' && !this.guideOn) { this.setGuide(true); this.guideAuto = true; } // the guide is the point of this mode
-      else if (was === 'muted' && m !== 'muted' && this.guideAuto) { this.setGuide(false); }
+      if (m === 'muted' && !this.guideOn) { this.setGuide(true, true); this.guideAuto = true; } // the guide is the point of this mode
+      else if (was === 'muted' && m !== 'muted' && this.guideAuto) { this.setGuide(false, true); }
       if (m !== 'muted') this.guideAuto = false;
     }
     this.syncTransport();
@@ -550,7 +561,8 @@ export class SongStudio {
       const cands = (s[this.source + 'SaCands'] || []).filter((hz) => Math.abs(1200 * Math.log2(hz / this.songSa)) > 50).slice(0, 3);
       const stepper = (label, value, dec, inc, disabled) => h('div', { class: 'stepper' }, h('span', { class: 'sp-l' }, label),
         h('div', { class: 'sp-c' }, h('button', { class: 'btn small round', 'aria-label': label + ' down', disabled, onclick: dec }, '−'), h('span', { class: 'sp-v' }, value), h('button', { class: 'btn small round', 'aria-label': label + ' up', disabled, onclick: inc }, '+')));
-      const tr = s.transpose || 0, oc = s.octave || 0;
+      const tr = this.player && this.player.kind === 'audio' && this.player.st0 != null ? this.player.st0 : s.transpose || 0, oc = s.octave || 0;
+      const trTo = (v) => { const p = this.setTranspose(v); draw(); p.then(draw); };
       box.replaceChildren(...[
         this.popHead(isIndian(settings) ? 'Song Sa' : 'Song key note', westernName(m), cents ? ` ${signed(cents)}¢` : ''),
         h('div', { class: 'row wrap kp-nudge' },
@@ -562,7 +574,7 @@ export class SongStudio {
         h('p', { class: 'kp-hint' }, 'Phrases usually come to rest on the key note: the bold line.'),
         h('div', { class: 'kp-sep' }),
         h('div', { class: 'kp-label' }, 'You sing it'),
-        stepper('Transpose', (tr > 0 ? '+' : '') + tr + ' st', () => this.setTranspose(tr - 1).then(draw), () => this.setTranspose(tr + 1).then(draw), this.source !== 'audio'),
+        stepper('Transpose', (tr > 0 ? '+' : '') + tr + ' st', () => trTo(tr - 1), () => trTo(tr + 1), this.source !== 'audio'),
         this.source !== 'audio' ? h('p', { class: 'kp-hint' }, s.hasCopy ? 'Transposing works on the recorded copy (Source chip).' : 'To transpose, build the guide once. That saves a recorded copy.') : null,
         stepper('Octave', ['Lower', 'Same', 'Higher'][oc + 1], () => { this.setOctave(oc - 1); draw(); }, () => { this.setOctave(oc + 1); draw(); })].filter(Boolean));
     };
@@ -840,6 +852,7 @@ export class SongStudio {
     this.setStatus('Transposing…');
     await player.setTranspose(st);
     if (this.song !== song || this.player !== player) return; // another song took over meanwhile
+    if (player.st0 !== st) return; // a newer choice is on its way and saves itself
     song.transpose = st; upsertSong(song); this.refreshKey();
     this.setStatus('');
   }
@@ -1028,7 +1041,8 @@ export class SongStudio {
     const ae = document.activeElement;
     if ((ae && (/INPUT|TEXTAREA|SELECT/.test(ae.tagName) || ae.isContentEditable)) || document.querySelector('dialog[open]') || popoverOpen()) return;
     const k = e.key;
-    if ((k === ' ' || k === 'Enter') && ae && ae !== document.body && ae.matches('button, a, summary, [role=button], [tabindex]') && ae.matches(':focus-visible')) return; // let the focused control handle it
+    // a control reached with the keyboard keeps Space and Enter; after a mouse click Space plays/pauses
+    if ((k === ' ' || k === 'Enter') && ae && ae !== document.body && ae.matches('button, a, summary, [role=button], [tabindex]') && this.kbFocus) return;
     if (this.lyrics.state === 'tap' && k === ' ') { e.preventDefault(); this.lyrics.tap(); return; }
     if (this.coach.active) { if (this.coach.key && this.coach.key(e)) { e.preventDefault(); return; } if (k === ' ' || /^Arrow(Up|Down)$/.test(k)) return; }
     if (k === ' ') { e.preventDefault(); this.toggle(); }
@@ -1044,6 +1058,16 @@ export class SongStudio {
   }
 
   // ---- main loop ------------------------------------------------------------------
+  // How long a change made now takes to be heard: from the context's own output clock when it has one,
+  // smoothed, else its stated latencies.
+  outputAhead(c) {
+    let a = NaN;
+    const o = c.getOutputTimestamp ? c.getOutputTimestamp() : null;
+    if (o && o.contextTime > 0 && o.performanceTime > 0) a = c.currentTime - o.contextTime - (performance.now() - o.performanceTime) / 1000;
+    if (!(a >= 0 && a < 1)) a = (c.baseLatency || 0.01) + (c.outputLatency || 0.03);
+    this.guideAhead = this.guideAhead == null ? a : this.guideAhead + 0.05 * (a - this.guideAhead);
+    return Math.min(0.6, this.guideAhead);
+  }
   loopRAF() {
     cancelAnimationFrame(this.raf);
     let lastRange = 0;
@@ -1085,21 +1109,27 @@ export class SongStudio {
         this.lastMicFrame = f;
         const lat = (mic.latencySec() + (c.outputLatency || 0.02) + (settings.latencyMs || 0) / 1000) * (p.r || 1);
         const st = t - lat;
+        // a jump in the song (a seek, a lyric line, the arrow keys) ends the take: the next frame starts a new one
+        const prev = this.frames[this.frames.length - 1];
+        if (prev && (st < prev.t - 0.15 || st > prev.t + 1)) this.finishTake();
         if (this.takeStart == null) { this.takeStart = st; this.startTakeRecording(); }
         pushFrame(this.frames, { t: st, c: f.hz > 0 ? 1200 * Math.log2(f.hz / this.practiceSa) : NaN });
       }
     }
-    // guide tone follows the melody, aimed a little ahead: it is set once per animation frame, glides
-    // to each pitch, and passes through the audio output, so aiming at "now" would sound late
+    // guide tone follows the melody. The song's clock gives what is heard now, but a change to the tone
+    // is heard only after the audio output's delay (larger on Bluetooth), so aim that far ahead, plus a
+    // frame for the update and the glide
     if (this.guideOn && playing && this.mel) {
-      const r = this.refAt(t + GUIDE_LEAD * (p.r || 1));
+      const r = this.refAt(t + (this.outputAhead(c) + 0.016) * (p.r || 1));
       this.follower.vol = settings.guideVol;
       this.follower.set(isNaN(r) ? 0 : this.practiceSa * Math.pow(2, r / 1200));
     }
     // lane
     this.lane.now = t;
     this.lane.user = this.frames.length ? this.frames : this.lastTakeFrames || [];
-    this.lane.hideUserFrom = this.mode === 'blind' && playing ? -1e9 : Infinity;
+    const blindNow = this.mode === 'blind' && playing; // Test yourself: no live feedback until the pass ends
+    this.lane.hideUserFrom = blindNow ? -1e9 : Infinity;
+    if (this.readout.el.hidden !== blindNow) this.readout.el.hidden = blindNow;
     if (!this.lane.fixed && performance.now() - lastRange > 400) { this.lane.autoRange(t - 2, t + 6); setLastRange(performance.now()); }
     const last = this.frames[this.frames.length - 1];
     const ref = this.refAt(t);
@@ -1140,6 +1170,7 @@ export class SongStudio {
     const span = coaching ? this.coach.span : null;
     const a = span ? span.a : this.loopOn && this.loop ? this.loop.a : frames[0].t;
     const b = span ? span.b : this.loopOn && this.loop ? this.loop.b : frames[frames.length - 1].t;
+    if (!(b - a > 0.5)) return;
     const res = analyzeTake({
       frames, refAt: this.refAt, start: a, end: b, tol: settings.tol, octaveFree: settings.octaveFree, tuning: settings.tuning,
       rangeHi: settings.rangeHighMidi != null ? (settings.rangeHighMidi - hzToMidi(this.practiceSa)) * 100 : null, forgiveLag: !coaching,
@@ -1151,7 +1182,7 @@ export class SongStudio {
       const prev = this.song.best[this.curPhrase];
       if (prev == null || res.score > prev) { this.song.best[this.curPhrase] = res.score; upsertSong(this.song); this.renderPhrases(); }
     }
-    logActivity({ type: 'song', id: this.song.id, phrase: this.curPhrase, score: res.score, accuracy: res.accuracy, minutes: (b - a) / 60 / (this.speed || 1), perSwara: res.perSwara, weak: res.weak });
+    logActivity({ type: 'song', id: this.song.id, phrase: this.curPhrase, score: res.score, accuracy: res.accuracy, minutes: Math.max(0, b - a) / 60 / (this.speed || 1), perSwara: res.perSwara, weak: res.weak });
     this.renderFeedback(res, blob);
   }
   renderFeedback(res, blob) {
