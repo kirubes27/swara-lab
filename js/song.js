@@ -272,11 +272,56 @@ function placeOnVideo(recMel, mapping, liveCents, frames, minI, maxI) {
   }
   if (bestScore < 20) return null; // couldn't line up (e.g. silent capture)
   const out = Float32Array.from(liveCents);
+  out.shift = best; // recording position of video time v: rt(v) + shift
   for (let g = minI; g <= maxI && g < n; g++) {
     if (!(frames.has(g) || frames.has(g - 1) || frames.has(g + 1))) continue; // keep earlier captures elsewhere
     out[g] = isNaN(rtOf[g]) ? NaN : melodyAt(recMel, rtOf[g] + best);
   }
   return out;
+}
+// Where the video really played during a capture: stretches of video time [v0, v1) with the recording
+// position rt = v + off. An ad (the video's clock stands still, or runs on the ad and then starts
+// the song from 0), buffering and pauses fall between or under them; a later stretch wins.
+function playedStretches(mapping) {
+  const out = [];
+  let cur = null;
+  for (let k = 1; k < mapping.length; k++) {
+    const a = mapping[k - 1], b = mapping[k], dv = b.vt - a.vt, dr = b.rt - a.rt;
+    if (!(a.on && b.on && dr > 0 && dr < 0.6 && Math.abs(dv - dr) < 0.05)) { cur = null; continue; }
+    if (!cur) {
+      // the video started or resumed between the sample before and this one: from where its clock
+      // stood (an ad break) or, after a jump back (an ad's own clock), from up to that long before
+      const p = mapping[k - 2];
+      const v0 = !p ? Math.max(0, a.vt - a.rt) : p.vt <= a.vt && a.vt - p.vt < 0.15 ? p.vt : Math.max(0, a.vt - Math.min(0.15, a.rt - p.rt));
+      out.push((cur = { v0, v1: b.vt, offs: [a.rt - a.vt] }));
+    }
+    cur.v1 = b.vt; cur.offs.push(b.rt - b.vt);
+  }
+  const res = out.filter((x) => x.v1 - x.v0 > 0.3).map((x) => ({ v0: x.v0, v1: x.v1, off: percentile(x.offs, 0.5) }));
+  // the video played on up to the break, between the last sample and the next stretch: no gap at a cut
+  for (let k = 1; k < res.length; k++) if (res[k].v0 > res[k - 1].v1 && res[k].v0 - res[k - 1].v1 < 0.15) res[k - 1].v1 = res[k].v0;
+  return res;
+}
+// Sound re-timed onto the video's clock (ads and gaps cut out): chans recorded at sr, shift as placeOnVideo found it.
+function retimeAudio(chans, sr, stretches, shift, vEnd) {
+  const n = Math.ceil(vEnd * sr), fade = Math.round(0.004 * sr);
+  return chans.map((x) => {
+    const o = new Float32Array(n);
+    for (const st of stretches) {
+      const a = Math.max(0, Math.round(st.v0 * sr)), b = Math.min(n, Math.round(st.v1 * sr)), d = Math.round((st.off + shift) * sr);
+      for (let i = a; i < b; i++) {
+        const j = i + d;
+        const g = Math.min(1, (i - a) / fade, (b - 1 - i) / fade); // a few ms of fade at each cut
+        o[i] = j >= 0 && j < x.length ? x[j] * g : 0;
+      }
+    }
+    return o;
+  });
+}
+function retimeMelody(mel, stretches, shift, vEnd) {
+  const cents = new Float32Array(Math.ceil(vEnd / 0.01) + 1).fill(NaN);
+  for (const st of stretches) for (let g = Math.ceil(st.v0 / 0.01); g * 0.01 < st.v1 && g < cents.length; g++) cents[g] = melodyAt(mel, g * 0.01 + st.off + shift);
+  return { hop: 0.01, t0: 0, cents };
 }
 const wrap1200 = (d) => ((((d + 600) % 1200) + 1200) % 1200) - 600;
 const i16 = (f) => { const o = new Int16Array(f.length); for (let i = 0; i < f.length; i++) o[i] = Math.max(-32768, Math.min(32767, Math.round(f[i] * 32767))); return o; };
@@ -1280,13 +1325,15 @@ export class SongStudio {
     const hopS = Math.round(0.01 * c.sampleRate);
     const ringN = an.win * 4;
     const L = new Float32Array(ringN), R = new Float32Array(ringN);
-    let w = 0, sinceHop = 0, total = 0;
+    let w = 0, sinceHop = 0, total = 0, lastSound = performance.now();
     const lin = new Float32Array(an.win), rin = new Float32Array(an.win);
     const frames = this.captureFrames = new Map(); // grid index -> frame
     const preview = new Map();
     const p = this.player;
     tap.port.onmessage = (ev) => {
       const { L: bl, R: br, t: tEnd } = ev.data;
+      let pk = 0; for (let i = 0; i < bl.length; i += 8) pk = Math.max(pk, Math.abs(bl[i]));
+      if (pk > 0.01) lastSound = performance.now();
       for (let i = 0; i < bl.length; i++) {
         L[w] = bl[i]; R[w] = br[i]; w = (w + 1) % ringN; total++; sinceHop++;
         if (sinceHop >= hopS && total >= an.win) {
@@ -1342,7 +1389,8 @@ export class SongStudio {
         const t = p.time();
         if (p.duration() && t >= p.duration() - 0.5) { clearInterval(endChk); res(); return; }
         still = Math.abs(t - lastT) < 0.01 && t > 5 ? still + 1 : 0; lastT = t;
-        if (still >= 8) { clearInterval(endChk); res(); } // nothing has moved for 4 s
+        // nothing has moved for 4 s and the tab is quiet (an ad keeps the clock still but makes sound)
+        if (still >= 8 && (performance.now() - lastSound > 3000 || still >= 240)) { clearInterval(endChk); res(); }
       }, 500);
       stopBtn.addEventListener('click', () => clearInterval(endChk));
     });
@@ -1378,24 +1426,36 @@ export class SongStudio {
       await idbPut('audio', song.id, copyBlob);
       song.hasCopy = true; savedCopy = true; upsertSong(song);
     }
+    // An ad, buffering or a pause recorded along with the song is cut out of the copy, so the copy
+    // runs on the video's own timeline. Only when there is something to cut (over a second).
+    const stretches = playedStretches(mapping);
+    const vStart = Math.min(...stretches.map((x) => x.v0)), vEnd = Math.max(...stretches.map((x) => x.v1));
+    const trim = savedCopy && stretches.length && vStart < 1 && recSecs - (vEnd - vStart) > 1 ? { stretches, vEnd, cut: recSecs - (vEnd - vStart) } : null;
     // Better melody: separate the voice from the recorded audio, then place it on the video timeline.
+    let cutDone = false, copyMelSaved = false;
     if (copyBlob && copyBlob.size > 50000 && recStart) {
       try {
         const res = await analyzeBlob(copyBlob, (pr, step, d) => { if (this.song === song) this.showProgress(step, pr, d); });
+        let shift = 0;
         if (res.separated) {
           const sepCents = placeOnVideo(res.mel, mapping, cents, frames, minI, maxCap);
-          if (sepCents) { mel = { hop: 0.01, t0: 0, cents: sepCents }; song[source + 'Separated'] = true; }
-          if (savedCopy) {
-            await idbPut('melody', song.id + ':audio', packMelody(res.mel));
-            await idbPut('audio', song.id + ':vocals', toI16(res.vocals));
-            song.audioSeparated = true; song.stemModel = res.model;
-          }
-          upsertSong(song);
+          if (sepCents) { mel = { hop: 0.01, t0: 0, cents: sepCents }; song[source + 'Separated'] = true; shift = sepCents.shift; }
         }
+        let copyMel = res.mel, copyVox = res.vocals;
+        if (trim && (cutDone = await this.cutCopy(song, copyBlob, trim, shift))) { // the copy's melody and voice, cut the same way
+          copyMel = retimeMelody(res.mel, trim.stretches, shift, trim.vEnd);
+          if (copyVox) { const o = retimeAudio(copyVox.L ? [copyVox.L, copyVox.R] : [copyVox], 44100, trim.stretches, shift, trim.vEnd); copyVox = o.length > 1 ? { L: o[0], R: o[1] } : o[0]; }
+        }
+        if (savedCopy) {
+          await idbPut('melody', song.id + ':audio', packMelody(copyMel)); copyMelSaved = true;
+          if (res.separated) { await idbPut('audio', song.id + ':vocals', toI16(copyVox)); song.audioSeparated = true; song.stemModel = res.model; }
+        }
+        upsertSong(song);
       } catch (e) { console.warn('separation after capture failed', e); }
     }
+    if (trim && !cutDone && !copyMelSaved) cutDone = await this.cutCopy(song, copyBlob, trim, 0); // not analysed: cut the sound alone
     await idbPut('melody', song.id + ':' + source, packMelody(mel));
-    if (savedCopy) toast('Saved a recorded copy. Use the Source chip to switch to it: then you can transpose, or hear the voice or the backing alone.', 'good', 8000);
+    if (savedCopy) toast(`Saved a recorded copy${cutDone ? ` (${Math.round(trim.cut)} s of ad or silence cut out)` : ''}. Use the Source chip to switch to it: then you can transpose, or hear the voice or the backing alone.`, 'good', 8000);
     if (firstCapture) { song[source + 'Sa'] = null; upsertSong(song); }
     if (song.lyricsTiming) { for (const k of [source, 'audio']) if (song.lyricsTiming[k] && !song.lyricsTiming[k].user) delete song.lyricsTiming[k]; upsertSong(song); } // re-time lyrics to the new guide
     if (this.song !== song || this.source !== source) return; // user moved on; data is saved for later
@@ -1404,6 +1464,19 @@ export class SongStudio {
     toast(`Melody guide ready: ${this.phrases.length} lines.`, 'good');
   }
 
+  // Store the copy cut onto the video's timeline (see playedStretches). True when it worked.
+  async cutCopy(song, blob, trim, shift) {
+    try {
+      const buf = await audioCtx().decodeAudioData(await blob.arrayBuffer());
+      const ch = [buf.getChannelData(0), buf.numberOfChannels > 1 ? buf.getChannelData(1) : buf.getChannelData(0)];
+      const o = retimeAudio(ch, buf.sampleRate, trim.stretches, shift, trim.vEnd);
+      const out = new AudioBuffer({ numberOfChannels: 2, length: o[0].length, sampleRate: buf.sampleRate });
+      out.copyToChannel(o[0], 0); out.copyToChannel(o[1], 1);
+      await idbPut('audio', song.id, audioBufferToWav(out));
+      song.copySecs = trim.vEnd; song.copyCut = Math.round(trim.cut); upsertSong(song);
+      return true;
+    } catch (e) { console.warn('cutting the copy failed', e); return false; }
+  }
   async analyzeAudio() {
     if (!this.song || this.busy) return;
     const song = this.song;
