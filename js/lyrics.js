@@ -59,7 +59,14 @@ async function getJSON(url, ms = 12000) {
   } finally { clearTimeout(tm); }
 }
 
-// All candidates for a title, best first: [{score, hit}]
+// Is (nearly) all of the song's name in the title? One shared word isn't enough to use lyrics
+// unasked ('Mix Test' isn't 'Fight Test').
+function nameCovered(x, words) {
+  const tn = tokens(x.trackName);
+  return tn.length > 0 && tn.filter((w) => words.includes(w)).length / tn.length >= 0.6;
+}
+
+// All candidates for a title, best first: [{score, hit, sure}]
 export async function searchLyrics(title, duration = 0) {
   const { queries, words } = titleQueries(title);
   const seen = new Map();
@@ -67,7 +74,7 @@ export async function searchLyrics(title, duration = 0) {
   for (const q of queries) {
     let list;
     try { list = await getJSON(`${API}/search?q=${encodeURIComponent(q)}`); } catch { failures++; continue; }
-    for (const x of list || []) if (!seen.has(x.id)) seen.set(x.id, { score: scoreHit(x, words, duration), hit: x });
+    for (const x of list || []) if (!seen.has(x.id)) seen.set(x.id, { score: scoreHit(x, words, duration), hit: x, sure: nameCovered(x, words) });
     const best = Math.max(-Infinity, ...[...seen.values()].map((v) => v.score));
     if (best >= 6) break; // a good synced match; no need to try more queries
   }
@@ -271,8 +278,9 @@ export class LyricsPanel {
       const res = await searchLyrics(song.title, this.s.player ? this.s.player.duration() : 0);
       if (token !== this.token) return;
       song.lyricsTried = true; upsertSong(song);
-      if (!res.length || res[0].score < 2.5) { this.state = 'none'; this.render(); return; }
-      this.use(toLyrics(res[0].hit));
+      const best = res.find((r) => r.sure && r.score >= 2.5);
+      if (!best) { this.state = 'none'; this.render(); return; }
+      this.use(toLyrics(best.hit));
     } catch {
       if (token !== this.token) return;
       this.state = 'error'; this.render();
