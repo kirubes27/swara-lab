@@ -409,7 +409,7 @@ export class SongStudio {
     this.chipsEl = h('div', { class: 'chips' });
     this.statusEl = h('span', { class: 'status-line', role: 'status', 'aria-live': 'polite' });
     this.head = h('header', { class: 'studio-head' },
-      h('div', { class: 'sh-text' }, h('div', { class: 'eyebrow' }, 'Songs'), this.titleBtn, h('div', { class: 'song-meta' }, this.subEl, this.chipsEl)),
+      h('div', { class: 'sh-text' }, h('div', { class: 'eyebrow' }, 'Songs'), h('h1', { class: 'song-h1' }, this.titleBtn), h('div', { class: 'song-meta' }, this.subEl, this.chipsEl)),
       h('div', { class: 'sh-act' }, this.statusEl,
         h('button', { class: 'btn small add-btn', 'aria-label': 'Add song', onclick: () => this.toggleAdd() }, icon('plus', 15), h('span', { class: 'lbl' }, 'Add song')),
         h('button', { class: 'icon-btn', 'aria-label': 'More options', title: 'More', 'aria-haspopup': 'menu', onclick: (e) => this.openMore(e.currentTarget) }, icon('more', 20))));

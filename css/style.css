@@ -93,9 +93,9 @@ main { max-width: 1080px; margin: 0 auto; padding: 36px 22px 120px; }
 .page { animation: pagein .45s var(--ease); }
 @keyframes pagein { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
 .page-head { margin-bottom: 26px; }
-.page-head .lead { font-size: 1.12rem; color: var(--text2); max-width: 680px; margin: 0; letter-spacing: -0.012em; }
+.page-head .lead { font-size: 1.12rem; color: var(--text2); max-width: 680px; margin: 0; letter-spacing: -0.012em; text-wrap: pretty; }
 .eyebrow { font-size: .76rem; font-weight: 650; color: var(--accent); letter-spacing: .04em; text-transform: uppercase; margin-bottom: 8px; }
-.section { margin: 36px 0 14px; display: flex; align-items: baseline; justify-content: space-between; gap: 12px; }
+.section { margin: 36px 0 14px; display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: 2px 12px; } /* a side note that doesn't fit drops below the title */
 .section h2 { margin: 0; }
 .back { display: inline-flex; align-items: center; gap: 2px; color: var(--accent); font-weight: 500; margin: -8px 0 16px -6px; }
 
@@ -150,7 +150,7 @@ main { max-width: 1080px; margin: 0 auto; padding: 36px 22px 120px; }
 .btn:disabled { opacity: .45; cursor: default; }
 input[type=url], input[type=text], select, textarea { background: var(--surface2); color: var(--text); border: 1px solid transparent; border-radius: var(--r-sm); padding: 9px 12px; font: inherit; max-width: 100%; outline: none; transition: border-color .2s, background .2s; }
 input[type=url]:focus, input[type=text]:focus, textarea:focus, select:focus { border-color: var(--accent); background: var(--surface); }
-select { appearance: none; -webkit-appearance: none; padding-right: 30px; background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%2386868b' stroke-width='2.5' stroke-linecap='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E"); background-repeat: no-repeat; background-position: right 10px center; cursor: pointer; }
+select { appearance: none; -webkit-appearance: none; padding-right: 30px; text-overflow: ellipsis; background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%2386868b' stroke-width='2.5' stroke-linecap='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E"); background-repeat: no-repeat; background-position: right 10px center; cursor: pointer; }
 input[type=range] { -webkit-appearance: none; appearance: none; background: transparent; width: 140px; height: 22px; cursor: pointer; }
 input[type=range]::-webkit-slider-runnable-track { height: 4px; border-radius: 4px; background: var(--surface3); }
 input[type=range]::-moz-range-track { height: 4px; border-radius: 4px; background: var(--surface3); }
@@ -160,15 +160,17 @@ input[type=checkbox] { -webkit-appearance: none; appearance: none; width: 38px; 
 input[type=checkbox]::after { content: ''; position: absolute; top: 2px; left: 2px; width: 19px; height: 19px; border-radius: 50%; background: #fff; box-shadow: 0 1px 3px rgba(0, 0, 0, .25); transition: transform .25s var(--ease); }
 input[type=checkbox]:checked { background: var(--good); }
 input[type=checkbox]:checked::after { transform: translateX(15px); }
-.ctl { display: inline-flex; align-items: center; gap: 8px; white-space: nowrap; font-size: .9rem; color: var(--text); }
+.ctl { display: inline-flex; align-items: center; gap: 8px; white-space: nowrap; font-size: .9rem; color: var(--text); max-width: 100%; }
+.ctl select { min-width: 0; } /* a long choice shrinks (with an ellipsis) instead of widening the page */
 .seg { display: inline-flex; padding: 2px; border-radius: 10px; background: var(--surface2); gap: 2px; }
 .seg button { height: 30px; padding: 0 12px; border: 0; border-radius: 8px; background: transparent; color: var(--text2); font: 550 .84rem/1 var(--font); cursor: pointer; white-space: nowrap; transition: background .2s, color .2s; }
 .seg button.on { background: var(--surface); color: var(--text); box-shadow: 0 1px 3px rgba(0, 0, 0, .12); }
 
 /* stats */
-.stats { display: flex; gap: 10px 0; flex-wrap: wrap; }
-.stat { min-width: 90px; padding: 2px 18px 2px 0; }
-.stat + .stat { border-left: 1px solid var(--hair); padding-left: 18px; }
+/* A hairline sits before every stat; the row starts 19px early and clips that strip, so
+   whichever stat begins a row (the first, or one that wrapped) shows no hairline or indent. */
+.stats { --st-pad: 18px; display: flex; gap: 10px 0; flex-wrap: wrap; margin-left: calc(-1px - var(--st-pad)); clip-path: inset(0 0 0 calc(1px + var(--st-pad))); }
+.stat { min-width: 90px; padding: 2px var(--st-pad); border-left: 1px solid var(--hair); }
 .stat-v { font: 650 1.35rem/1.15 var(--font-display); letter-spacing: -0.02em; font-variant-numeric: tabular-nums; }
 .stat-l { font-size: .78rem; color: var(--text2); }
 
@@ -203,7 +205,8 @@ canvas.lane.tall { height: 380px; }
 .controls { display: flex; flex-wrap: wrap; gap: 12px 22px; align-items: center; margin: 16px 0; }
 
 /* exercises */
-.ex-head h3 { font-size: 1.7rem; font-weight: 700; letter-spacing: -0.028em; margin-bottom: 8px; }
+.ex-head .ex-title { font-size: 1.7rem; font-weight: 700; letter-spacing: -0.028em; margin-bottom: 8px; }
+.aside-title { font-size: 1.35rem; font-weight: 650; } /* warm-up: the routine's name, sized like a section title */
 .ex-head .what { font-size: 1.02rem; max-width: 760px; }
 .why summary { cursor: pointer; color: var(--accent); font-size: .9rem; font-weight: 500; margin-bottom: 12px; list-style: none; display: inline-flex; align-items: center; gap: 6px; }
 .why summary::-webkit-details-marker { display: none; }
@@ -255,6 +258,7 @@ main.wide { max-width: 1240px; }
 .studio-head { display: flex; align-items: flex-end; justify-content: space-between; gap: 12px 20px; flex-wrap: wrap; margin-bottom: 18px; }
 .sh-text { flex: 1; min-width: 0; }
 .studio-head .eyebrow { margin-bottom: 2px; }
+.song-h1 { display: flex; margin: 0; } /* the page's h1 holds the song-title button and adds no space of its own */
 .song-title { display: inline-flex; align-items: center; gap: 4px; max-width: 100%; margin: 0 0 6px -4px; padding: 2px 6px 2px 4px; border: 0; border-radius: 12px; background: none; color: var(--text); font: 700 2.15rem/1.15 var(--font-display); letter-spacing: -0.032em; text-align: left; cursor: pointer; transition: background .2s; }
 .song-title:hover { background: var(--surface2); }
 .song-title .st-text { overflow: hidden; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; }
@@ -477,9 +481,11 @@ canvas.keyboard { width: 100%; height: 92px; display: block; border-radius: 12px
 .bar-col { height: 100%; display: flex; align-items: flex-end; }
 .bar { width: 100%; background: var(--accent); border-radius: 4px 4px 0 0; }
 .bar-col:hover .bar { opacity: .8; }
-svg.trend { width: 100%; max-width: 680px; height: auto; display: block; }
+.trend-host { min-height: 168px; }
+svg.trend { display: block; overflow: visible; }
 svg.trend .gridline { stroke: var(--hair); stroke-width: 1; }
-svg.trend .axis { fill: var(--text3); font-size: 11px; }
+svg.trend .axis { fill: var(--text2); font-size: 12px; text-anchor: end; dominant-baseline: middle; font-variant-numeric: tabular-nums; }
+.trend-days { margin-top: 6px; }
 svg.trend .trend-line { fill: none; stroke: var(--accent); stroke-width: 2; }
 svg.trend .trend-dot { fill: var(--accent); stroke: var(--surface); stroke-width: 2; }
 .diverge { display: grid; gap: 8px; }
@@ -571,7 +577,6 @@ svg.trend .trend-dot { fill: var(--accent); stroke: var(--surface); stroke-width
   h1 { font-size: 2rem; } .hello h1 { font-size: 2.2rem; }
   .signature { position: static; width: 100%; height: 72px; margin: 4px 0 -6px; }
   .split, .grid2, .lower { grid-template-columns: minmax(0, 1fr); }
-  .grid3 { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
   .form .field { grid-template-columns: minmax(0, 1fr); }
   .form .field select { width: 100%; }
   .form .field small { grid-column: 1; }
@@ -585,18 +590,21 @@ svg.trend .trend-dot { fill: var(--accent); stroke: var(--surface); stroke-width
   .t-go { top: 16px; }
   .tour-card { padding: 26px 22px 20px; border-radius: 24px; }
   .big-note { font-size: 3.4rem; }
-  .stat + .stat { padding-left: 14px; } .stat { padding-right: 14px; min-width: 0; }
+  .stats { --st-pad: 14px; } .stat { min-width: 0; }
 }
-@media (max-width: 560px) {
+/* hub tiles: three across while they read well (down to 641px), then one per row with the chevron at the side */
+@media (max-width: 640px) {
   .grid3 { grid-template-columns: minmax(0, 1fr); }
   .tile { min-height: 0; flex-direction: row; align-items: center; gap: 14px; }
-  .tile .t-body { margin-top: 0; }
+  .tile .t-body { margin-top: 0; padding-right: 26px; }
   .t-go { top: 50%; transform: translateY(-50%); }
+}
+@media (max-width: 560px) {
   .brand span.word { display: none; }
+  .stats:has(> .stat:nth-child(4)) > .stat { flex: 1 0 34%; } /* four stats: two by two rather than three and one */
 }
 @media (max-width: 900px) { #toasts { bottom: calc(80px + env(safe-area-inset-bottom)); } }
 @media (max-width: 560px) {
-  .tile .t-body { padding-right: 26px; }
   .studio-head { position: relative; }
   .sh-text { flex-basis: 100%; }
   .sh-act { position: absolute; top: -6px; right: 0; }
@@ -612,6 +620,7 @@ svg.trend .trend-dot { fill: var(--accent); stroke: var(--surface); stroke-width
   .lane-overlay .a-foot { padding-top: 8px; }
 }
 @media (pointer: coarse) {
+  input[type=url], input[type=text], select, textarea { font-size: 16px; } /* below 16px, iPhones zoom the page on focus */
   .btn.small, .seg button, .chip-btn, .key-pill { min-height: 36px; }
   .btn.small.ab { width: 36px; }
   .back, .why summary { padding-block: 8px; }

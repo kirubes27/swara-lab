@@ -354,7 +354,6 @@ p.th-flabel { margin: 18px 0 8px; }
   .th-parts { grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); }
 }
 @media (max-width: 560px) {
-  .th .tile .t-body { padding-right: 26px; }
   .th-demo { padding: 18px 16px 20px; margin-left: -4px; margin-right: -4px; }
   .th-controls { gap: 10px 12px; }
   .th-field { flex-wrap: wrap; }

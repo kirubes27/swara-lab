@@ -2,7 +2,7 @@
 import { audioCtx, mic } from './audio.js';
 import { tanpura } from './sound.js';
 import { settings, saveSettings, onSettings, progress, streak, minutesOn, dayKey, resetProgress, songs, lastSong, getSong } from './store.js';
-import { saHzFrom, westernName, hzToMidi, midiToHz, kattaiName, kaliSafedName, SWARA_LONG, SWARA_SHORT, DEGREE_LONG, scaleList, scaleLabel, isIndian, term } from './music.js';
+import { saHzFrom, westernName, hzToMidi, midiToHz, kattaiName, kaliSafedName, SWARA_LONG, SWARA_SHORT, DEGREE_LONG, scaleList, scaleShort, SCALES, isIndian, term } from './music.js';
 import { EXERCISES, WARMUP_ROUTINE, exText } from './exercises.js';
 import { ExercisePlayer } from './practice.js';
 import { SongStudio } from './song.js';
@@ -190,8 +190,8 @@ function renderPractice(sub) {
   if (sub === 'warmup') {
     const list = h('ol', { class: 'steps' });
     const host = h('div', { class: 'grow' });
-    root.append(back, h('div', { class: 'split' }, h('aside', {}, h('h2', {}, 'Warm-up'), h('p', { class: 'muted small' }, 'About 8 minutes. Jump to any step.'), list), host));
-    const player = new ExercisePlayer(host);
+    root.append(back, h('div', { class: 'split' }, h('aside', {}, h('h1', { class: 'aside-title' }, 'Warm-up'), h('p', { class: 'muted small' }, 'About 8 minutes. Jump to any step.'), list), host));
+    const player = new ExercisePlayer(host, { titleTag: 'h2' });
     let idx = 0;
     const go = (i) => { idx = i; [...list.children].forEach((li, k) => li.classList.toggle('cur', k === i)); player.load(WARMUP_ROUTINE[i]); };
     WARMUP_ROUTINE.forEach((id, i) => list.append(h('li', { tabindex: 0, role: 'button', onclick: () => go(i), onkeydown: (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); go(i); } } }, exText(EXERCISES[id], settings).name, h('small', {}, `${EXERCISES[id].mins}′`))));
@@ -238,16 +238,31 @@ function renderProgress() {
   for (const r of log) if (r.score != null && (r.type === 'drill' || r.type === 'song')) { const k = dayKey(r.date); const a = byDay.get(k) || []; a.push(r.score); byDay.set(k, a); }
   const pts = [...byDay.entries()].sort().slice(-30).map(([k, a]) => ({ k, v: a.reduce((x, y) => x + y, 0) / a.length, n: a.length }));
   if (pts.length) {
-    const W = 600, H = 160, pad = 24;
-    const X = (i) => pad + (pts.length === 1 ? (W - 2 * pad) / 2 : (i / (pts.length - 1)) * (W - 2 * pad));
-    const Y = (v) => H - pad - (v / 100) * (H - 2 * pad);
-    const path = pts.map((p, i) => (i ? 'L' : 'M') + X(i).toFixed(1) + ' ' + Y(p.v).toFixed(1)).join(' ');
-    const svg = `<svg viewBox="0 0 ${W} ${H}" class="trend" role="img" aria-label="Average score per practice day">
-      ${[0, 50, 100].map((v) => `<line x1="${pad}" x2="${W - pad}" y1="${Y(v)}" y2="${Y(v)}" class="gridline"/><text x="2" y="${Y(v) + 4}" class="axis">${v}</text>`).join('')}
-      <path d="${path}" class="trend-line"/>
-      ${pts.map((p, i) => `<circle cx="${X(i)}" cy="${Y(p.v)}" r="5" class="trend-dot"><title>${p.k}: ${Math.round(p.v)} (${p.n} takes)</title></circle>`).join('')}
-    </svg>`;
-    root.append(h('div', { class: 'card' }, h('h3', {}, 'Average score per practice day'), h('div', { html: svg })));
+    // Drawn at the box's real width (one SVG unit = one CSS pixel), so labels stay 12px and dots stay round at any size.
+    const host = h('div', { class: 'trend-host' });
+    const draw = (W) => {
+      const H = 168, padL = 34, padR = 10, padT = 10, padB = 10;
+      const span = W - padL - padR;
+      const X = (i) => padL + (pts.length === 1 ? span / 2 : (i / (pts.length - 1)) * span);
+      const Y = (v) => padT + (1 - v / 100) * (H - padT - padB);
+      const r = pts.length > 1 && span / (pts.length - 1) < 16 ? 3 : 4.5;
+      const path = pts.map((p, i) => (i ? 'L' : 'M') + X(i).toFixed(1) + ' ' + Y(p.v).toFixed(1)).join(' ');
+      host.innerHTML = `<svg viewBox="0 0 ${W} ${H}" width="${W}" height="${H}" class="trend" role="img" aria-label="Average score per practice day">
+        ${[0, 50, 100].map((v) => `<line x1="${padL}" x2="${W - padR}" y1="${Y(v)}" y2="${Y(v)}" class="gridline"/><text x="${padL - 10}" y="${Y(v)}" class="axis">${v}</text>`).join('')}
+        <path d="${path}" class="trend-line"/>
+        ${pts.map((p, i) => `<circle cx="${X(i).toFixed(1)}" cy="${Y(p.v).toFixed(1)}" r="${r}" class="trend-dot"><title>${p.k}: ${Math.round(p.v)} (${p.n} ${p.n === 1 ? 'take' : 'takes'})</title></circle>`).join('')}
+      </svg>`;
+    };
+    let drawnW = 0;
+    const ro = new ResizeObserver(() => {
+      if (!host.isConnected) { ro.disconnect(); return; }
+      const W = Math.floor(host.clientWidth);
+      if (W > 0 && W !== drawnW) { drawnW = W; draw(W); }
+    });
+    ro.observe(host);
+    const day = (k) => new Date(k + 'T12:00').toLocaleDateString(undefined, { day: 'numeric', month: 'short' });
+    root.append(h('div', { class: 'card' }, h('h3', {}, 'Average score per practice day'), host,
+      pts.length > 1 ? h('div', { class: 'row small muted spread trend-days' }, h('span', {}, day(pts[0].k)), h('span', {}, day(pts[pts.length - 1].k))) : null));
   }
   // per-swara tendency (diverging)
   const sw = progress.swara || {};
@@ -285,7 +300,9 @@ function renderSettings(sub) {
     ...notes.map((m) => h('option', { value: m, selected: m === settings.saMidi }, isIndian(settings) ? `${westernName(m)} · ${kattaiName(m % 12)} · ${kaliSafedName(m % 12)}` : westernName(m))));
   const fineOut = h('span', { class: 'mono' }, settings.saFine + '¢');
   const fine = h('input', { type: 'range', min: -50, max: 50, step: 1, value: settings.saFine, oninput: (e) => { fineOut.textContent = e.target.value + '¢'; }, onchange: (e) => saveSettings({ saFine: +e.target.value }) });
-  const sel = (key, opts) => h('select', { onchange: (e) => saveSettings({ [key]: isNaN(+e.target.value) ? e.target.value : +e.target.value }) }, ...opts.map(([v, l]) => h('option', { value: v, selected: settings[key] == v }, l)));
+  // Option labels stay short enough to show whole in a phone-width dropdown; details go in the help line.
+  const sel = (key, opts, then) => h('select', { onchange: (e) => { saveSettings({ [key]: isNaN(+e.target.value) ? e.target.value : +e.target.value }); if (then) then(e.target.value); } }, ...opts.map(([v, l]) => h('option', { value: v, selected: settings[key] == v }, l)));
+  const liveHelp = (fn, v0) => { const el = h('span', {}, fn(v0)); return [el, (v) => { el.textContent = fn(v); }]; };
   const range = (key, min, max, step, fmt = (v) => v) => {
     const out = h('span', { class: 'mono', 'data-out': key }, fmt(settings[key]));
     return h('span', { class: 'row' }, h('input', { type: 'range', min, max, step, value: settings[key], 'data-key': key, oninput: (e) => (out.textContent = fmt(+e.target.value)), onchange: (e) => saveSettings({ [key]: +e.target.value }) }), out);
@@ -298,40 +315,53 @@ function renderSettings(sub) {
   import('./device.js').then((m) => { deviceHost.innerHTML = ''; m.renderDeviceCheck(deviceHost); if (sub === 'device') deviceCard.scrollIntoView({ block: 'start' }); })
     .catch(() => { deviceHost.replaceChildren(h('p', { class: 'small muted' }, 'The device check couldn\'t load.')); });
   const styleSel = h('select', { onchange: (e) => { saveSettings({ notation: e.target.value }); renderSettings(); } },
-    ...[['western', 'General: any song (note names C D E, scale degrees 1–7)'], ['hindustani', 'Indian, Hindustani sargam (S R G m P D N)'], ['carnatic', 'Indian, Carnatic (S R1 R2 G2 G3 M1 …)']]
+    ...[['western', 'General (C D E)'], ['hindustani', 'Hindustani (S R G m)'], ['carnatic', 'Carnatic (S R2 G3 M1)']]
       .map(([v, l]) => h('option', { value: v, selected: settings.notation === v }, l)));
+  // Default scale: in Indian style the dropdown shows the raga name alone, and the line under it gives the familiar name.
+  const scaleName = (k) => scaleShort(k, settings);
+  const [scaleHelp, showScale] = liveHelp((k) => {
+    const sc = SCALES[k], nm = scaleName(k);
+    const same = !sc || nm === sc.name ? '' : sc.indianOnly ? `${nm} is ${sc.name} in Hindustani music. ` : `${nm} has the notes of the ${sc.name.toLowerCase()} scale. `;
+    return same + 'Drills that use a scale start in this one; each drill lets you change it.';
+  }, SCALES[settings.scale] ? settings.scale : 'major');
+  const SEP = {
+    fast: 'Fast uses Spleeter: about a minute on any computer. In tests on 50 real songs it traced 72% of sung notes correctly.',
+    balanced: 'Balanced uses Kim Vocal 2: seconds with a graphics card, many minutes without one. In tests on 50 real songs it traced 87% of sung notes correctly.',
+    best: 'Best blends Mel-RoFormer with Kim Vocal 2. It needs a graphics card and a one-time 464 MB download, and takes a few minutes. In tests on 50 real songs it traced 90% of sung notes correctly, with fewer false notes.',
+  };
+  const [sepHelp, showSep] = liveHelp((v) => `Used when a song is analysed. ${SEP[v]}${v === 'fast' ? '' : ' Without a graphics card, Fast is used unless you pick another here.'}`, settings.sepQuality || 'balanced');
   const themeSeg = h('div', { class: 'seg' }, ...[['auto', 'Automatic'], ['light', 'Light'], ['dark', 'Dark']].map(([v, l]) => h('button', { class: (settings.theme || 'auto') === v ? 'on' : '', onclick: () => { saveSettings({ theme: v }); applyTheme(); renderSettings(); } }, l)));
-  root.append(h('div', { class: 'page-head' }, h('h1', {}, 'Settings')),
+  root.append(h('div', { class: 'page-head' }, h('h1', {}, 'Settings'), h('p', { class: 'lead' }, 'Note names, sounds and feedback. Changes are saved in this browser as you make them.')),
     h('div', { class: 'card form' },
       h('h3', {}, 'Appearance'),
       field('Theme', themeSeg),
     ),
     h('div', { class: 'card form' },
       h('h3', {}, 'Music style'),
-      field('Style', styleSel, 'Changes note names, scales, drone and exercise wording. Any song works in either style; pick whichever way of naming notes you think in.'),
+      field('Style', styleSel, 'General names notes C D E and scale degrees 1–7; Hindustani and Carnatic use Indian sargam. This changes note names, scales, the drone and exercise wording. Any song works in any style.'),
     ),
     h('div', { class: 'card form' },
       h('h3', {}, ind ? 'Your tonic (Sa)' : 'Exercise key'),
       field(ind ? 'Sa' : 'Key note', saSel, ind ? 'Run the range test for a suggestion. Typical: men C#3–E3 (1½–3 kattai), women G#3–C4 (5½ kattai and up).' : 'The note warm-ups and drills are built on. Run the range test for a suggestion.'),
       field('Fine tune', h('span', { class: 'row' }, fine, fineOut), ind ? 'For matching a harmonium or shruti box that\'s slightly off.' : 'For matching an instrument that\'s slightly off A=440.'),
       field('Drone sound', sel('droneSound', [['auto', ind ? 'Automatic (tanpura)' : 'Automatic (soft pad)'], ['pad', 'Soft pad (root + fifth)'], ['tanpura', 'Tanpura']])),
-      tanpura.kind() === 'tanpura' ? field('Tanpura tuning', sel('tanpuraFirst', [['P', 'Pa – Sa Sa Sa (most ragas)'], ['M', 'Ma – Sa Sa Sa (ragas without Pa)'], ['N', 'Ni – Sa Sa Sa'], ['S', 'Sa – Sa Sa Sa']])) : null,
+      tanpura.kind() === 'tanpura' ? field('Tanpura tuning', sel('tanpuraFirst', [['P', 'Pa – Sa Sa Sa'], ['M', 'Ma – Sa Sa Sa'], ['N', 'Ni – Sa Sa Sa'], ['S', 'Sa – Sa Sa Sa']]), 'The first string\'s note. Pa suits most ragas; Ma suits ragas without Pa.') : null,
       field('Drone volume', range('tanpuraVol', 0, 1, 0.05, (v) => Math.round(v * 100) + '%')),
     ),
     h('div', { class: 'card form' },
       h('h3', {}, 'Tuning & scales'),
-      field('Note positions', sel('tuning', [['et', 'Equal temperament (piano / most recordings)'], ['just', 'Just intonation (drone-natural, e.g. major 3rd at 386¢)']]), 'Singing against a drone pulls you towards just intervals: major 3rds and 7ths sit slightly lower than on a piano. Indian classical music uses them; most pop and rock recordings are equal-tempered.'),
-      field('Default scale', sel('scale', scaleList(settings).map((k) => [k, scaleLabel(k, settings)]))),
+      field('Note positions', sel('tuning', [['et', 'Equal temperament'], ['just', 'Just intonation']]), 'Equal temperament is a piano\'s tuning, used by most pop and rock recordings. Just intonation is where a drone pulls you: major 3rds and 7ths sit a little lower (a major 3rd is 386¢, not 400¢). Indian classical music uses it.'),
+      field('Default scale', sel('scale', scaleList(settings).map((k) => [k, scaleName(k)]), showScale), scaleHelp),
     ),
     h('div', { class: 'card form' },
       h('h3', {}, 'Feedback'),
-      field('In-tune tolerance', sel('tol', [[50, '±50¢: beginner (half a semitone)'], [35, '±35¢: standard'], [25, '±25¢: strict'], [15, '±15¢: microtone work']])),
+      field('In-tune tolerance', sel('tol', [[50, '±50¢ · beginner'], [35, '±35¢ · standard'], [25, '±25¢ · strict'], [15, '±15¢ · microtone work']]), 'How far from the note still counts as in tune. 100¢ is a semitone.'),
       field('Octave-forgiving', h('span', {}, chk('octaveFree'), ' count a note as right in any octave'), 'Useful when singing a song originally sung by another voice type.'),
       field('Hide my line by default', h('span', {}, chk('blind'), ' in drills, show my pitch line only afterwards'), 'Practising without constant feedback improves retention (the "guidance hypothesis" in motor learning).'),
     ),
     h('div', { class: 'card form' },
       h('h3', {}, 'Audio'),
-      field('Voice separation', h('select', { onchange: (e) => saveSettings({ sepQuality: e.target.value, sepQualityChosen: true }) }, ...[['fast', 'Fast: Spleeter, about a minute'], ['balanced', 'Balanced: Kim Vocal 2, seconds with a graphics card'], ['best', 'Best: Mel-RoFormer, 464 MB download once, a few minutes (needs a graphics card)']].map(([v, l]) => h('option', { value: v, selected: (settings.sepQuality || 'balanced') === v }, l))), 'Used when a song is analysed. Without a graphics card in the browser, Fast is used unless you pick another here. In testing on 50 real songs: Fast traced 72% of sung notes correctly, Balanced 87%, Best (Mel-RoFormer blended with Kim) 90%, with fewer false notes.'),
+      field('Voice separation', h('select', { onchange: (e) => { saveSettings({ sepQuality: e.target.value, sepQualityChosen: true }); showSep(e.target.value); } }, ...[['fast', 'Fast'], ['balanced', 'Balanced'], ['best', 'Best']].map(([v, l]) => h('option', { value: v, selected: (settings.sepQuality || 'balanced') === v }, l))), sepHelp),
       field('Headphones', h('span', {}, chk('headphones'), ' I sing with headphones'), 'With speakers, leave this off: echo cancellation removes the song from your microphone so it isn\'t mistaken for your voice. With headphones, switch it on for the cleanest pitch.'),
       field('Mic sensitivity', range('micSens', 0, 1, 0.05, (v) => Math.round(v * 100) + '%'), 'Raise it if quiet singing isn\'t detected; lower it if room noise is drawn as pitch.'),
       field('Guide volume', range('guideVol', 0, 1, 0.05, (v) => Math.round(v * 100) + '%')),

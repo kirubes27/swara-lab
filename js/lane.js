@@ -98,10 +98,11 @@ export class PitchLane {
         g.lineWidth = (strong ? 1.6 : mid ? 1.2 : 1) * dpr;
         g.globalAlpha = inScale ? 1 : 0.35;
         g.beginPath(); g.moveTo(56 * dpr, y); g.lineTo(W, y); g.stroke();
-        if (pxPerCent * 100 > 9 * dpr || strong || mid) {
+        const lab = this.notation === 'western' ? '' : this.notation === 'carnatic' ? CARNATIC[i] : SWARA_SHORT[i];
+        // Only where the whole label fits (octave dots included): a name cut in half at the edge misreads.
+        const above = (lab && o > 0 ? 10 : 7) * dpr, below = (lab && o < 0 ? 10 : 7) * dpr;
+        if ((pxPerCent * 100 > 9 * dpr || strong || mid) && y - above >= 0 && y + below <= H) {
           g.fillStyle = strong ? T.text : T.dim;
-          let lab = this.notation === 'carnatic' ? CARNATIC[i] : SWARA_SHORT[i];
-          if (this.notation === 'western') lab = '';
           const midi = Math.round(hzToMidi(this.saHz) + c / 100);
           const west = WESTERN[((midi % 12) + 12) % 12] + (Math.floor(midi / 12) - 1);
           g.font = `${(strong ? 12 : 11) * dpr}px ${T.font}`;

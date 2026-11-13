@@ -134,6 +134,12 @@ export function scaleLabel(key, s) {
   const ind = s.notation === 'carnatic' ? sc.carnatic : sc.indian;
   return ind ? `${ind} (${sc.name})` : sc.name;
 }
+// For a dropdown, where long labels get cut: the raga name alone in Indian style.
+export function scaleShort(key, s) {
+  const sc = SCALES[key];
+  if (!sc) return key;
+  return (isIndian(s) && (s.notation === 'carnatic' ? sc.carnatic : sc.indian)) || sc.name;
+}
 export function scaleList(s) { return Object.keys(SCALES).filter((k) => isIndian(s) || !SCALES[k].indianOnly); }
 
 // Scale-degree names relative to the tonic (for the general style).

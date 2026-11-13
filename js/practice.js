@@ -4,7 +4,7 @@ import { tanpura, guide } from './sound.js';
 import { PitchLane } from './lane.js';
 import { EXERCISES, exText, parseSargam, makePlan, planRefAt, planCurves, scoredNotes, pitchMatchLines, alignTake } from './exercises.js';
 import { analyzeTake, swaraBiasText, describeSwaraBias } from './coach.js';
-import { SCALES, scaleList, scaleLabel, saHzFrom, nearestSwara, swaraLabel, noteText, isIndian, term, wrapCents, westernName, hzToMidi, median, clamp } from './music.js';
+import { SCALES, scaleList, scaleLabel, scaleShort, saHzFrom, nearestSwara, swaraLabel, noteText, isIndian, term, wrapCents, westernName, hzToMidi, median, clamp } from './music.js';
 import { settings, logActivity } from './store.js';
 import { h, toast, ensureMic, tipList } from './ui.js';
 import { icon } from './icons.js';
@@ -49,8 +49,8 @@ const centsOf = (hz, sa) => 1200 * Math.log2(hz / sa);
 
 // ---------------------------------------------------------------------------
 export class ExercisePlayer {
-  constructor(root, { onDone } = {}) {
-    this.root = root; this.onDone = onDone; this.running = false;
+  constructor(root, { onDone, titleTag = 'h1' } = {}) {
+    this.root = root; this.onDone = onDone; this.running = false; this.titleTag = titleTag;
     root.classList.add('ex');
     root.innerHTML = '';
     this.head = h('div', { class: 'ex-head' });
@@ -90,7 +90,7 @@ export class ExercisePlayer {
     this.echo = def.echo !== false;
     this.head.innerHTML = '';
     this.head.append(
-      h('h3', {}, this.tx.name),
+      h(this.titleTag, { class: 'ex-title' }, this.tx.name),
       h('p', { class: 'what' }, this.tx.what),
       h('details', { class: 'why' }, h('summary', {}, 'Why this helps'), h('p', {}, this.tx.why)),
     );
@@ -109,7 +109,7 @@ export class ExercisePlayer {
     items.push(h('label', { class: 'ctl', title: 'Hide your pitch line while singing; see it afterwards. Builds independence from the screen.' }, blind, ' Hide my line'));
     if (def.thaatText || def.kind === 'match' || id === 'custom') {
       this.scaleKey = SCALES[settings.scale] ? settings.scale : 'major';
-      const sel = h('select', { onchange: (e) => { this.scaleKey = e.target.value; this.preview(); } }, ...scaleList(settings).map((k) => h('option', { value: k, selected: k === this.scaleKey }, scaleLabel(k, settings))));
+      const sel = h('select', { title: scaleLabel(this.scaleKey, settings), onchange: (e) => { this.scaleKey = e.target.value; sel.title = scaleLabel(this.scaleKey, settings); this.preview(); } }, ...scaleList(settings).map((k) => h('option', { value: k, selected: k === this.scaleKey }, scaleShort(k, settings))));
       items.push(h('label', { class: 'ctl' }, 'Scale ', sel));
     }
     if (id === 'custom') {

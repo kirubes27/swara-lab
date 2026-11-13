@@ -62,8 +62,8 @@ function renderHub(root) {
     h('span', { class: 't-body' }, h('span', { class: 't-title' }, s.title), h('span', { class: 't-sub' }, s.sub), h('span', { class: 't-sub th-count' }, `${s.lessons.length} lessons`)),
     h('span', { class: 't-go' }, ic('chevron', 18)));
   root.append(
-    h('div', { class: 'page-head' }, h('div', { class: 'eyebrow' }, 'Theory'), h('h1', {}, 'Music, explained by ear'),
-      h('p', { class: 'lead' }, 'Short lessons, each with something to play. Start anywhere.')),
+    h('div', { class: 'page-head' }, h('h1', {}, 'Theory'),
+      h('p', { class: 'lead' }, 'Music, explained by ear: short lessons, each with something to play. Start anywhere.')),
     h('div', { class: 'grid3' }, ...SECTIONS.map((s, i) => tile(s, i === 0))),
     h('div', { class: 'section' }, h('h2', {}, 'For singers')),
     h('div', { class: 'list' },
