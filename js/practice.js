@@ -4,7 +4,7 @@ import { tanpura, guide } from './sound.js';
 import { PitchLane } from './lane.js';
 import { EXERCISES, exText, parseSargam, makePlan, planRefAt, planCurves, scoredNotes, pitchMatchLines, alignTake } from './exercises.js';
 import { analyzeTake, swaraBiasText, describeSwaraBias } from './coach.js';
-import { SCALES, scaleList, scaleLabel, scaleShort, saHzFrom, nearestSwara, swaraLabel, noteText, isIndian, term, wrapCents, westernName, hzToMidi, median, clamp } from './music.js';
+import { SCALES, scaleList, scaleLabel, scaleShort, defaultScale, saHzFrom, nearestSwara, swaraLabel, noteText, isIndian, term, wrapCents, westernName, hzToMidi, median, clamp } from './music.js';
 import { settings, logActivity } from './store.js';
 import { h, toast, ensureMic, tipList } from './ui.js';
 import { icon } from './icons.js';
@@ -108,12 +108,15 @@ export class ExercisePlayer {
     items.push(h('label', { class: 'ctl' }, 'Tempo ', tempo, ' ', bpmOut));
     items.push(h('label', { class: 'ctl', title: 'Hide your pitch line while singing; see it afterwards. Builds independence from the screen.' }, blind, ' Hide my line'));
     if (def.thaatText || def.kind === 'match' || id === 'custom') {
-      this.scaleKey = SCALES[settings.scale] ? settings.scale : 'major';
-      const sel = h('select', { title: scaleLabel(this.scaleKey, settings), onchange: (e) => { this.scaleKey = e.target.value; sel.title = scaleLabel(this.scaleKey, settings); this.preview(); } }, ...scaleList(settings).map((k) => h('option', { value: k, selected: k === this.scaleKey }, scaleShort(k, settings))));
+      this.scaleKey = defaultScale(settings);
+      // the full name ('Mohanam (Major pentatonic)') as a tooltip when the picker shows only part of it
+      const tip = () => { const full = scaleLabel(this.scaleKey, settings); if (full !== scaleShort(this.scaleKey, settings)) sel.title = full; else sel.removeAttribute('title'); };
+      const sel = h('select', { onchange: (e) => { this.scaleKey = e.target.value; tip(); this.preview(); } }, ...scaleList(settings).map((k) => h('option', { value: k, selected: k === this.scaleKey }, scaleShort(k, settings))));
+      tip();
       items.push(h('label', { class: 'ctl' }, 'Scale ', sel));
     }
     if (id === 'custom') {
-      this.text = h('textarea', { class: 'sargam-input', rows: 2, spellcheck: false }, def.text);
+      this.text = h('textarea', { class: 'sargam-input', rows: 2, spellcheck: false, 'aria-label': 'Your line of notes' }, def.text);
       this.head.append(this.text);
     }
     this.controls.append(...items);
@@ -123,7 +126,7 @@ export class ExercisePlayer {
 
   buildLines() {
     const def = this.def;
-    const scale = (SCALES[this.scaleKey] || SCALES[settings.scale] || SCALES.major).notes;
+    const scale = (SCALES[this.scaleKey] || SCALES[defaultScale(settings)]).notes;
     const opts = { bpm: this.bpm, tuning: settings.tuning, scale };
     if (def.kind === 'match') {
       const sa = saHzFrom(settings);

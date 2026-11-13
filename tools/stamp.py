@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
-"""Stamp each script with a hash of its content.
+"""Stamp each script and stylesheet with a hash of its content.
 
 GitHub Pages lets browsers keep files for 10 minutes, so right after an update a browser could
-run a mix of old and new scripts. The import map in index.html gives every script an address
-with its hash (?v=...): a changed file is fetched fresh, an unchanged one stays cached.
+run a mix of old and new files. The import map in index.html gives every script an address
+with its hash (?v=...), and each stylesheet link gets one too: a changed file is fetched fresh,
+an unchanged one stays cached.
 
 Run before publishing:  python3 tools/stamp.py
 """
@@ -18,11 +19,15 @@ imports = {f'./js/{name}': f'./js/{name}?v={h}' for name, h in stamps.items()}
 block = '<script type="importmap">' + json.dumps({'imports': imports}, separators=(',', ':')) + '</script>'
 entry = f'<script type="module" src="js/app.js?v={stamps["app.js"]}"></script>'
 
+css = {f.name: hashlib.sha1(f.read_bytes()).hexdigest()[:8] for f in sorted((root / 'css').glob('*.css'))}
+
 page = root / 'index.html'
 html = page.read_text()
+html, links = re.subn(r'<link rel="stylesheet" href="css/([\w.-]+\.css)(\?v=\w+)?">',
+                      lambda m: f'<link rel="stylesheet" href="css/{m.group(1)}?v={css[m.group(1)]}">' if m.group(1) in css else m.group(0), html)
 html, found = re.subn(r'<script type="importmap">.*?</script>', lambda m: block, html, flags=re.S)
 html, n = re.subn(r'<script type="module" src="js/app\.js(\?v=\w+)?"></script>', lambda m: entry if found else block + '\n' + entry, html)
 if n != 1:
     raise SystemExit('index.html: the app.js script tag was not found')
 page.write_text(html)
-print(f'stamped {len(stamps)} scripts')
+print(f'stamped {len(stamps)} scripts and {links} stylesheets')

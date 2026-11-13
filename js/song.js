@@ -192,7 +192,7 @@ const MODELS = {
 };
 // WebGPU: the API can exist without a usable graphics adapter (common on Linux), so ask for one.
 let HAS_GPU = typeof navigator !== 'undefined' && !!navigator.gpu;
-const gpuChecked = (async () => {
+export const gpuChecked = (async () => {
   try {
     const a = navigator.gpu && (await navigator.gpu.requestAdapter());
     HAS_GPU = !!a && !(a.isFallbackAdapter || (a.info && a.info.isFallbackAdapter)); // a software adapter is no faster than the processor
@@ -443,8 +443,8 @@ export class SongStudio {
     this.linesTools = h('div', { class: 'panel-tools' });
     this.feedback = h('div', { class: 'feedback' });
     this.lower = h('div', { class: 'lower' },
-      h('section', { class: 'panel lines-panel' }, h('div', { class: 'panel-head' }, h('h3', {}, 'Lines'), this.linesTools), this.phraseBox),
-      h('section', { class: 'panel take-panel' }, h('div', { class: 'panel-head' }, h('h3', {}, 'Last take')), this.feedback));
+      h('section', { class: 'panel lines-panel' }, h('div', { class: 'panel-head' }, h('h2', {}, 'Lines'), this.linesTools), this.phraseBox),
+      h('section', { class: 'panel take-panel' }, h('div', { class: 'panel-head' }, h('h2', {}, 'Last take')), this.feedback));
     // "Learn this line" reuses the stage; these hold its header, controls and results
     this.coachHead = h('div', { class: 'coach-head', hidden: true });
     this.coachOut = h('div', { class: 'coach-out', hidden: true });
@@ -679,7 +679,7 @@ export class SongStudio {
     const yt = this.source === 'youtube';
     this.showOverlay('center', h('div', { class: 'empty' },
       h('div', { class: 'empty-ic' }, icon('wave', 26)),
-      h('h3', {}, 'Build the melody guide'),
+      h('h2', {}, 'Build the melody guide'),
       h('p', {}, yt ? 'The song plays once while the voice is traced. When Chrome asks, pick this tab and keep “Also share tab audio” on.' : 'The voice is separated from the music and traced. It runs on this device.'),
       h('div', { class: 'row center wrap' },
         h('button', { class: 'btn primary', onclick: () => (yt ? this.captureTab() : this.analyzeAudio()) }, icon(yt ? 'headphones' : 'sparkle', 16), yt ? 'Start' : 'Analyse'),

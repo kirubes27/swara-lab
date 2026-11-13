@@ -99,9 +99,13 @@ export class PitchLane {
         g.globalAlpha = inScale ? 1 : 0.35;
         g.beginPath(); g.moveTo(56 * dpr, y); g.lineTo(W, y); g.stroke();
         const lab = this.notation === 'western' ? '' : this.notation === 'carnatic' ? CARNATIC[i] : SWARA_SHORT[i];
-        // Only where the whole label fits (octave dots included): a name cut in half at the edge misreads.
-        const above = (lab && o > 0 ? 10 : 7) * dpr, below = (lab && o < 0 ? 10 : 7) * dpr;
-        if ((pxPerCent * 100 > 9 * dpr || strong || mid) && y - above >= 0 && y + below <= H) {
+        // Labels sit in the lane's left corners, so each one (octave dot included) keeps clear of the
+        // canvas edge and the 22px rounded corner: a name or dot cut off there misreads. Near that limit
+        // it fades rather than switching off, so a line hovering at the edge doesn't blink.
+        const top = (lab && o > 0 ? 16 : 13) * dpr, bot = (lab && o < 0 ? 16 : 13) * dpr;
+        const room = Math.min(y - top, H - bot - y);
+        if ((pxPerCent * 100 > 9 * dpr || strong || mid) && room > 0) {
+          g.globalAlpha *= Math.min(1, room / (8 * dpr));
           g.fillStyle = strong ? T.text : T.dim;
           const midi = Math.round(hzToMidi(this.saHz) + c / 100);
           const west = WESTERN[((midi % 12) + 12) % 12] + (Math.floor(midi / 12) - 1);

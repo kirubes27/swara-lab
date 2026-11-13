@@ -2,10 +2,10 @@
 import { audioCtx, mic } from './audio.js';
 import { tanpura } from './sound.js';
 import { settings, saveSettings, onSettings, progress, streak, minutesOn, dayKey, resetProgress, songs, lastSong, getSong } from './store.js';
-import { saHzFrom, westernName, hzToMidi, midiToHz, kattaiName, kaliSafedName, SWARA_LONG, SWARA_SHORT, DEGREE_LONG, scaleList, scaleShort, SCALES, isIndian, term } from './music.js';
+import { saHzFrom, westernName, hzToMidi, midiToHz, kattaiName, kaliSafedName, SWARA_LONG, SWARA_SHORT, DEGREE_LONG, scaleList, scaleShort, defaultScale, SCALES, isIndian, term } from './music.js';
 import { EXERCISES, WARMUP_ROUTINE, exText } from './exercises.js';
 import { ExercisePlayer } from './practice.js';
-import { SongStudio } from './song.js';
+import { SongStudio, gpuChecked } from './song.js';
 import { RangeFinder } from './range.js';
 import { FreeSing } from './free.js';
 import { h, toast, ensureMic } from './ui.js';
@@ -114,8 +114,8 @@ function signatureSVG() {
     <path class="voice" d="M10 100 C 40 102, 62 60, 96 58 C 118 57, 124 49, 134 56 C 150 66, 166 60, 184 76 C 206 98, 226 118, 254 82 C 268 64, 274 60, 282 63 C 300 46, 322 22, 352 38 C 368 46, 372 30, 384 44 C 400 60, 420 66, 448 58"/>
     <circle class="dot" cx="448" cy="58" r="5"/></svg>`;
 }
-function tile({ href, ic, title, sub, hero = false }) {
-  return h('a', { class: 'tile' + (hero ? ' hero' : ''), href }, h('span', { class: 't-ic' }, icon(ic, 20)), h('span', { class: 't-body' }, h('span', { class: 't-title' }, title), h('span', { class: 't-sub' }, sub)), h('span', { class: 't-go' }, icon('chevron', 18)));
+function tile({ href, ic, title, sub, hero = false, tip }) {
+  return h('a', { class: 'tile' + (hero ? ' hero' : ''), href, title: tip }, h('span', { class: 't-ic' }, icon(ic, 20)), h('span', { class: 't-body' }, h('span', { class: 't-title' }, title), h('span', { class: 't-sub' }, sub)), h('span', { class: 't-go' }, icon('chevron', 18)));
 }
 function renderToday() {
   const root = $('#page-today'); root.innerHTML = '';
@@ -128,7 +128,7 @@ function renderToday() {
   root.append(hello);
   root.append(h('div', { class: 'grid3' },
     tile({ href: '#practice/warmup', ic: 'breath', title: 'Warm up', sub: '8 minutes. Breath, sirens, scales, slides.', hero: true }),
-    tile({ href: '#songs', ic: 'songs', title: song ? 'Continue: ' + song.title.replace(/\s*\(.*\)\s*$/, '') : 'Learn a song', sub: song ? 'Loop a line, slow it down, sing against the original.' : 'Import any song and sing against its melody.' }),
+    tile({ href: '#songs', ic: 'songs', tip: song ? song.title : null, title: song ? 'Continue: ' + song.title.replace(/\s*\(.*\)\s*$/, '') : 'Learn a song', sub: song ? 'Loop a line, slow it down, sing against the original.' : 'Import any song and sing against its melody.' }),
     tile({ href: '#practice/free', ic: 'wave', title: 'Free sing', sub: 'Sing anything and see your pitch live.' })));
   if (!settings.saChosen) root.append(h('div', { class: 'callout row wrap spread', style: 'margin-top:16px' },
     h('div', {}, h('strong', {}, 'Find your range first'), h('p', { class: 'small', style: 'margin:2px 0 0' }, 'Two minutes. It sets a comfortable key for every exercise and lets songs suggest a key that fits you.')),
@@ -174,7 +174,7 @@ function renderPractice(sub) {
   if (!sub) {
     root.append(h('div', { class: 'page-head' }, h('h1', {}, 'Practice'), h('p', { class: 'lead' }, 'Everything is open. Warm up, explore your voice, or work on one skill at a time.')),
       h('div', { class: 'grid3' },
-        tile({ href: '#practice/warmup', ic: 'breath', title: 'Warm-up routine', sub: `${WARMUP_ROUTINE.length} short steps · about 8 minutes`, hero: true }),
+        tile({ href: '#practice/warmup', ic: 'breath', title: 'Warm-up routine', sub: `${WARMUP_ROUTINE.length} short steps · about 8\u00a0minutes`, hero: true }),
         tile({ href: '#practice/free', ic: 'wave', title: 'Free sing', sub: 'An open pitch monitor. Sing anything.' }),
         tile({ href: '#practice/range', ic: 'target', title: 'Find your range', sub: settings.rangeLowMidi != null ? `Currently ${westernName(settings.rangeLowMidi)}–${westernName(settings.rangeHighMidi)}` : 'Lowest and highest comfortable notes.' })));
     for (const [g, ids] of GROUPS) root.append(h('div', { class: 'section' }, h('h2', {}, g)), h('div', { class: 'drill-grid' }, ...ids.map(drillCard)));
@@ -214,8 +214,10 @@ function renderPractice(sub) {
 
 // ---------------------------------------------------------------------------
 // Progress
+let trendObserver = null; // redraws the score chart at its box's width
 function renderProgress() {
   const root = $('#page-progress'); root.innerHTML = '';
+  if (trendObserver) { trendObserver.disconnect(); trendObserver = null; }
   const log = progress.log;
   root.append(h('div', { class: 'page-head' }, h('h1', {}, 'Progress'), h('p', { class: 'lead' }, 'How much you practise, how your scores move, and where each note tends to land.')));
   if (!log.length) { root.append(h('div', { class: 'card flat' }, h('p', { class: 'muted', style: 'margin:0' }, 'Nothing yet. Minutes, scores and your tuning map appear here as you practise.'))); return; }
@@ -238,10 +240,15 @@ function renderProgress() {
   for (const r of log) if (r.score != null && (r.type === 'drill' || r.type === 'song')) { const k = dayKey(r.date); const a = byDay.get(k) || []; a.push(r.score); byDay.set(k, a); }
   const pts = [...byDay.entries()].sort().slice(-30).map(([k, a]) => ({ k, v: a.reduce((x, y) => x + y, 0) / a.length, n: a.length }));
   if (pts.length) {
-    // Drawn at the box's real width (one SVG unit = one CSS pixel), so labels stay 12px and dots stay round at any size.
+    // Drawn at the box's real width (one SVG unit = one CSS pixel), so labels keep their size and dots stay round.
     const host = h('div', { class: 'trend-host' });
+    const padL = 38, padR = 10;
+    // dates in English like the rest of the page (the reader's own English, else '25 Oct'), with the year when it changes
+    const loc = /^en\b/i.test(navigator.language || '') ? navigator.language : 'en-GB';
+    const years = pts[0].k.slice(0, 4) !== pts[pts.length - 1].k.slice(0, 4);
+    const day = (k, yr = years) => new Date(k + 'T12:00').toLocaleDateString(loc, yr ? { day: 'numeric', month: 'short', year: 'numeric' } : { day: 'numeric', month: 'short' });
     const draw = (W) => {
-      const H = 168, padL = 34, padR = 10, padT = 10, padB = 10;
+      const H = 168, padT = 10, padB = 10;
       const span = W - padL - padR;
       const X = (i) => padL + (pts.length === 1 ? span / 2 : (i / (pts.length - 1)) * span);
       const Y = (v) => padT + (1 - v / 100) * (H - padT - padB);
@@ -250,19 +257,20 @@ function renderProgress() {
       host.innerHTML = `<svg viewBox="0 0 ${W} ${H}" width="${W}" height="${H}" class="trend" role="img" aria-label="Average score per practice day">
         ${[0, 50, 100].map((v) => `<line x1="${padL}" x2="${W - padR}" y1="${Y(v)}" y2="${Y(v)}" class="gridline"/><text x="${padL - 10}" y="${Y(v)}" class="axis">${v}</text>`).join('')}
         <path d="${path}" class="trend-line"/>
-        ${pts.map((p, i) => `<circle cx="${X(i).toFixed(1)}" cy="${Y(p.v).toFixed(1)}" r="${r}" class="trend-dot"><title>${p.k}: ${Math.round(p.v)} (${p.n} ${p.n === 1 ? 'take' : 'takes'})</title></circle>`).join('')}
+        ${pts.map((p, i) => `<circle cx="${X(i).toFixed(1)}" cy="${Y(p.v).toFixed(1)}" r="${r}" class="trend-dot"><title>${day(p.k, true)}: ${Math.round(p.v)} (${p.n} ${p.n === 1 ? 'take' : 'takes'})</title></circle>`).join('')}
       </svg>`;
     };
     let drawnW = 0;
-    const ro = new ResizeObserver(() => {
-      if (!host.isConnected) { ro.disconnect(); return; }
+    trendObserver = new ResizeObserver(() => {
       const W = Math.floor(host.clientWidth);
       if (W > 0 && W !== drawnW) { drawnW = W; draw(W); }
     });
-    ro.observe(host);
-    const day = (k) => new Date(k + 'T12:00').toLocaleDateString(undefined, { day: 'numeric', month: 'short' });
+    trendObserver.observe(host);
+    // first and last practice day, under their points (a single day sits under its dot)
+    const one = pts.length === 1;
     root.append(h('div', { class: 'card' }, h('h3', {}, 'Average score per practice day'), host,
-      pts.length > 1 ? h('div', { class: 'row small muted spread trend-days' }, h('span', {}, day(pts[0].k)), h('span', {}, day(pts[pts.length - 1].k))) : null));
+      h('div', { class: 'row small muted trend-days' + (one ? '' : ' spread'), style: `padding:0 ${padR}px 0 ${padL}px${one ? ';justify-content:center' : ''}` },
+        h('span', {}, day(pts[0].k)), one ? null : h('span', {}, day(pts[pts.length - 1].k)))));
   }
   // per-swara tendency (diverging)
   const sw = progress.swara || {};
@@ -294,14 +302,30 @@ function renderProgress() {
 // Settings
 function renderSettings(sub) {
   const root = $('#page-settings'); root.innerHTML = '';
-  const field = (label, ctl, help) => h('label', { class: 'field' }, h('span', { class: 'flabel' }, label), ctl, help ? h('small', { class: 'muted' }, help) : null);
+  // A field's label names its control and the help line describes it; left to the <label> alone,
+  // a screen reader would read the whole help paragraph as the control's name.
+  let fieldN = 0;
+  const field = (label, ctl, help) => {
+    const id = 'set-' + ++fieldN;
+    const c = ctl.matches('select, input, textarea') ? ctl : ctl.querySelector('select, input, textarea');
+    if (c) {
+      let names = id + '-l';
+      if (c.type === 'checkbox' && c.nextSibling && c.nextSibling.nodeType === 3) { // the words beside a switch are part of its name
+        c.nextSibling.replaceWith(h('span', { id: id + '-w' }, c.nextSibling.textContent));
+        names += ' ' + id + '-w';
+      }
+      c.setAttribute('aria-labelledby', names);
+      if (help) c.setAttribute('aria-describedby', id + '-h');
+    }
+    return h('label', { class: 'field' }, h('span', { class: 'flabel', id: id + '-l' }, label), ctl, help ? h('small', { class: 'muted', id: id + '-h' }, help) : null);
+  };
   const notes = []; for (let m = 36; m <= 72; m++) notes.push(m);
   const saSel = h('select', { onchange: (e) => saveSettings({ saMidi: +e.target.value, saChosen: true }) },
     ...notes.map((m) => h('option', { value: m, selected: m === settings.saMidi }, isIndian(settings) ? `${westernName(m)} · ${kattaiName(m % 12)} · ${kaliSafedName(m % 12)}` : westernName(m))));
   const fineOut = h('span', { class: 'mono' }, settings.saFine + '¢');
   const fine = h('input', { type: 'range', min: -50, max: 50, step: 1, value: settings.saFine, oninput: (e) => { fineOut.textContent = e.target.value + '¢'; }, onchange: (e) => saveSettings({ saFine: +e.target.value }) });
   // Option labels stay short enough to show whole in a phone-width dropdown; details go in the help line.
-  const sel = (key, opts, then) => h('select', { onchange: (e) => { saveSettings({ [key]: isNaN(+e.target.value) ? e.target.value : +e.target.value }); if (then) then(e.target.value); } }, ...opts.map(([v, l]) => h('option', { value: v, selected: settings[key] == v }, l)));
+  const sel = (key, opts, then, cur = settings[key]) => h('select', { onchange: (e) => { saveSettings({ [key]: isNaN(+e.target.value) ? e.target.value : +e.target.value }); if (then) then(e.target.value); } }, ...opts.map(([v, l]) => h('option', { value: v, selected: cur == v }, l)));
   const liveHelp = (fn, v0) => { const el = h('span', {}, fn(v0)); return [el, (v) => { el.textContent = fn(v); }]; };
   const range = (key, min, max, step, fmt = (v) => v) => {
     const out = h('span', { class: 'mono', 'data-out': key }, fmt(settings[key]));
@@ -314,23 +338,30 @@ function renderSettings(sub) {
   const deviceCard = h('div', { class: 'card form', id: 'device' }, h('h3', {}, 'This device'), deviceHost);
   import('./device.js').then((m) => { deviceHost.innerHTML = ''; m.renderDeviceCheck(deviceHost); if (sub === 'device') deviceCard.scrollIntoView({ block: 'start' }); })
     .catch(() => { deviceHost.replaceChildren(h('p', { class: 'small muted' }, 'The device check couldn\'t load.')); });
-  const styleSel = h('select', { onchange: (e) => { saveSettings({ notation: e.target.value }); renderSettings(); } },
+  const styleSel = h('select', { 'data-k': 'notation', onchange: (e) => { saveSettings({ notation: e.target.value }); renderSettings(); $('#page-settings [data-k="notation"]')?.focus(); } },
     ...[['western', 'General (C D E)'], ['hindustani', 'Hindustani (S R G m)'], ['carnatic', 'Carnatic (S R2 G3 M1)']]
       .map(([v, l]) => h('option', { value: v, selected: settings.notation === v }, l)));
   // Default scale: in Indian style the dropdown shows the raga name alone, and the line under it gives the familiar name.
   const scaleName = (k) => scaleShort(k, settings);
+  const scaleNow = defaultScale(settings);
   const [scaleHelp, showScale] = liveHelp((k) => {
     const sc = SCALES[k], nm = scaleName(k);
-    const same = !sc || nm === sc.name ? '' : sc.indianOnly ? `${nm} is ${sc.name} in Hindustani music. ` : `${nm} has the notes of the ${sc.name.toLowerCase()} scale. `;
-    return same + 'Drills that use a scale start in this one; each drill lets you change it.';
-  }, SCALES[settings.scale] ? settings.scale : 'major');
+    const familiar = sc && (/^(Dorian|Mixolydian|Lydian|Phrygian)$/.test(sc.name) ? sc.name : sc.name.toLowerCase()); // modes keep their capital
+    const same = !sc || nm === sc.name ? '' : sc.indianOnly ? `${nm} has the notes of the Hindustani thaat ${sc.name}. ` : `${nm} has the notes of the ${familiar} scale. `;
+    return same + 'Drills that move along a scale use this one; the scale drills also let you change it as you go.';
+  }, scaleNow);
+  // Voice separation: the dropdown shows the quality that will actually run (js/song.js effectiveQuality)
   const SEP = {
-    fast: 'Fast uses Spleeter: about a minute on any computer. In tests on 50 real songs it traced 72% of sung notes correctly.',
+    fast: 'Fast uses Spleeter: about a minute on most computers. In tests on 50 real songs it traced 72% of sung notes correctly.',
     balanced: 'Balanced uses Kim Vocal 2: seconds with a graphics card, many minutes without one. In tests on 50 real songs it traced 87% of sung notes correctly.',
-    best: 'Best blends Mel-RoFormer with Kim Vocal 2. It needs a graphics card and a one-time 464 MB download, and takes a few minutes. In tests on 50 real songs it traced 90% of sung notes correctly, with fewer false notes.',
+    best: 'Best blends Mel\u2011RoFormer with Kim Vocal 2. It needs a graphics card (without one, Balanced runs instead) and a one-time 464 MB download, and takes a few minutes. In tests on 50 real songs it traced 90% of sung notes correctly, with fewer false notes.',
   };
-  const [sepHelp, showSep] = liveHelp((v) => `Used when a song is analysed. ${SEP[v]}${v === 'fast' ? '' : ' Without a graphics card, Fast is used unless you pick another here.'}`, settings.sepQuality || 'balanced');
-  const themeSeg = h('div', { class: 'seg' }, ...[['auto', 'Automatic'], ['light', 'Light'], ['dark', 'Dark']].map(([v, l]) => h('button', { class: (settings.theme || 'auto') === v ? 'on' : '', onclick: () => { saveSettings({ theme: v }); applyTheme(); renderSettings(); } }, l)));
+  let noGpuDefault = false;
+  const [sepHelp, showSep] = liveHelp((v) => `Used when a song is analysed. ${SEP[v]}${noGpuDefault && v === 'fast' ? ' This browser has no graphics card to use, so Fast is the default here.' : ''}`, settings.sepQuality || 'balanced');
+  const sepSel = h('select', { onchange: (e) => { saveSettings({ sepQuality: e.target.value, sepQualityChosen: true }); noGpuDefault = false; showSep(e.target.value); } },
+    ...[['fast', 'Fast'], ['balanced', 'Balanced'], ['best', 'Best']].map(([v, l]) => h('option', { value: v, selected: (settings.sepQuality || 'balanced') === v }, l)));
+  if (!settings.sepQualityChosen) gpuChecked.then((gpu) => { if (!gpu && !settings.sepQualityChosen && sepSel.isConnected) { noGpuDefault = true; sepSel.value = 'fast'; showSep('fast'); } });
+  const themeSeg = h('div', { class: 'seg', 'data-k': 'theme' }, ...[['auto', 'Automatic'], ['light', 'Light'], ['dark', 'Dark']].map(([v, l]) => h('button', { class: (settings.theme || 'auto') === v ? 'on' : '', 'aria-pressed': String((settings.theme || 'auto') === v), onclick: () => { saveSettings({ theme: v }); applyTheme(); renderSettings(); $('#page-settings [data-k="theme"] .on')?.focus(); } }, l)));
   root.append(h('div', { class: 'page-head' }, h('h1', {}, 'Settings'), h('p', { class: 'lead' }, 'Note names, sounds and feedback. Changes are saved in this browser as you make them.')),
     h('div', { class: 'card form' },
       h('h3', {}, 'Appearance'),
@@ -338,20 +369,20 @@ function renderSettings(sub) {
     ),
     h('div', { class: 'card form' },
       h('h3', {}, 'Music style'),
-      field('Style', styleSel, 'General names notes C D E and scale degrees 1–7; Hindustani and Carnatic use Indian sargam. This changes note names, scales, the drone and exercise wording. Any song works in any style.'),
+      field('Style', styleSel, 'General style names notes C D E and scale degrees 1–7; Hindustani and Carnatic use Indian sargam. The style changes note names, scales, the drone and exercise wording. Any song works in any style.'),
     ),
     h('div', { class: 'card form' },
       h('h3', {}, ind ? 'Your tonic (Sa)' : 'Exercise key'),
       field(ind ? 'Sa' : 'Key note', saSel, ind ? 'Run the range test for a suggestion. Typical: men C#3–E3 (1½–3 kattai), women G#3–C4 (5½ kattai and up).' : 'The note warm-ups and drills are built on. Run the range test for a suggestion.'),
       field('Fine tune', h('span', { class: 'row' }, fine, fineOut), ind ? 'For matching a harmonium or shruti box that\'s slightly off.' : 'For matching an instrument that\'s slightly off A=440.'),
       field('Drone sound', sel('droneSound', [['auto', ind ? 'Automatic (tanpura)' : 'Automatic (soft pad)'], ['pad', 'Soft pad (root + fifth)'], ['tanpura', 'Tanpura']])),
-      tanpura.kind() === 'tanpura' ? field('Tanpura tuning', sel('tanpuraFirst', [['P', 'Pa – Sa Sa Sa'], ['M', 'Ma – Sa Sa Sa'], ['N', 'Ni – Sa Sa Sa'], ['S', 'Sa – Sa Sa Sa']]), 'The first string\'s note. Pa suits most ragas; Ma suits ragas without Pa.') : null,
+      tanpura.kind() === 'tanpura' ? field('Tanpura tuning', sel('tanpuraFirst', [['P', 'Pa – Sa Sa Sa'], ['M', 'Ma – Sa Sa Sa'], ['N', 'Ni – Sa Sa Sa'], ['S', 'Sa – Sa Sa Sa']]), ind ? 'The first string\'s note. Pa suits most ragas; Ma suits ragas without Pa.' : 'The first string\'s note: Pa is the fifth, Ma the fourth, Ni the seventh, Sa the key note. Pa suits most music.') : null,
       field('Drone volume', range('tanpuraVol', 0, 1, 0.05, (v) => Math.round(v * 100) + '%')),
     ),
     h('div', { class: 'card form' },
       h('h3', {}, 'Tuning & scales'),
       field('Note positions', sel('tuning', [['et', 'Equal temperament'], ['just', 'Just intonation']]), 'Equal temperament is a piano\'s tuning, used by most pop and rock recordings. Just intonation is where a drone pulls you: major 3rds and 7ths sit a little lower (a major 3rd is 386¢, not 400¢). Indian classical music uses it.'),
-      field('Default scale', sel('scale', scaleList(settings).map((k) => [k, scaleName(k)]), showScale), scaleHelp),
+      field('Default scale', sel('scale', scaleList(settings).map((k) => [k, scaleName(k)]), showScale, scaleNow), scaleHelp),
     ),
     h('div', { class: 'card form' },
       h('h3', {}, 'Feedback'),
@@ -361,7 +392,7 @@ function renderSettings(sub) {
     ),
     h('div', { class: 'card form' },
       h('h3', {}, 'Audio'),
-      field('Voice separation', h('select', { onchange: (e) => { saveSettings({ sepQuality: e.target.value, sepQualityChosen: true }); showSep(e.target.value); } }, ...[['fast', 'Fast'], ['balanced', 'Balanced'], ['best', 'Best']].map(([v, l]) => h('option', { value: v, selected: (settings.sepQuality || 'balanced') === v }, l))), sepHelp),
+      field('Voice separation', sepSel, sepHelp),
       field('Headphones', h('span', {}, chk('headphones'), ' I sing with headphones'), 'With speakers, leave this off: echo cancellation removes the song from your microphone so it isn\'t mistaken for your voice. With headphones, switch it on for the cleanest pitch.'),
       field('Mic sensitivity', range('micSens', 0, 1, 0.05, (v) => Math.round(v * 100) + '%'), 'Raise it if quiet singing isn\'t detected; lower it if room noise is drawn as pitch.'),
       field('Guide volume', range('guideVol', 0, 1, 0.05, (v) => Math.round(v * 100) + '%')),

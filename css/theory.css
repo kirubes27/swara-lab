@@ -27,9 +27,8 @@
 }
 
 /* ---------- page parts ---------- */
-.th .page-head .lead { max-width: 640px; }
 .th-count { color: var(--text2); font-size: .78rem; margin-top: 2px; }
-.tile.hero .th-count { color: rgba(255, 255, 255, .7); }
+.tile.hero .th-count { color: #fff; }
 .th-num { font: 650 .9rem/1 var(--font-display); color: var(--text2); font-variant-numeric: tabular-nums; }
 .th-also { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-top: 22px; color: var(--text2); font-size: .85rem; }
 .th-also span { margin-right: 4px; }
@@ -353,6 +352,7 @@ p.th-flabel { margin: 18px 0 8px; }
   .th-cof-wheel { max-width: 360px; }
   .th-parts { grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); }
 }
+@media (pointer: coarse) { .th-select { font-size: 16px; } } /* below 16px, iPhones zoom the page on focus */
 @media (max-width: 560px) {
   .th-demo { padding: 18px 16px 20px; margin-left: -4px; margin-right: -4px; }
   .th-controls { gap: 10px 12px; }
