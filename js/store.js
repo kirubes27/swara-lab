@@ -5,7 +5,7 @@ function lsGet(k, d) { try { const v = localStorage.getItem(LS + k); return v ? 
 function lsSet(k, v) { try { localStorage.setItem(LS + k, JSON.stringify(v)); } catch (e) { console.warn('storage', e); } }
 
 export const DEFAULT_SETTINGS = {
-  saMidi: 49,          // C#3: a common male Sa. Range test suggests a personal one.
+  saMidi: 49,          // C#3: a common male Sa. The range check suggests a personal one.
   saFine: 0,
   saChosen: false,
   notation: 'western',   // 'western' = general style; 'hindustani' / 'carnatic' = Indian style

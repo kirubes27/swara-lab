@@ -601,7 +601,7 @@ export class SongStudio {
   rangeFit() {
     const shift = (this.source === 'audio' ? this.song.transpose || 0 : 0) + 12 * (this.song.octave || 0);
     const span = `${westernName(hzToMidi(this.melP5) + shift)}–${westernName(hzToMidi(this.melP95) + shift)}`;
-    if (settings.rangeLowMidi == null) return { span, tone: '', title: 'Melody range. Do the range test for a key suggestion.' };
+    if (settings.rangeLowMidi == null) return { span, tone: '', title: 'Melody range. Do the range check for a key suggestion.' };
     const lo = hzToMidi(this.melP5) + shift, hi = hzToMidi(this.melP95) + shift;
     const over = Math.max(0, Math.round(hi - (settings.rangeHighMidi - 1))), under = Math.max(0, Math.round((settings.rangeLowMidi + 1) - lo));
     return { span, over, under, tone: over || under ? 'warn' : 'good', title: over || under ? 'Partly outside your comfortable range' : 'Fits your range' };

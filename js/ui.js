@@ -19,7 +19,7 @@ export function h(tag, attrs = {}, ...kids) {
 
 export function toast(msg, kind = 'info', ms = 4200) {
   let box = document.getElementById('toasts');
-  if (!box) { box = h('div', { id: 'toasts' }); document.body.append(box); }
+  if (!box) { box = h('div', { id: 'toasts', role: 'status', 'aria-live': 'polite' }); document.body.append(box); }
   const t = h('div', { class: 'toast ' + kind }, msg);
   box.append(t);
   setTimeout(() => t.classList.add('out'), ms);

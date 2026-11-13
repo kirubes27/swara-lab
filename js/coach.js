@@ -166,7 +166,7 @@ function tipsFor(r, { tol, rangeHi }) {
   if (highFlat) tips.push({ title: `High notes are flat (${c(r.hiBias)})`, level: 'high', drill: 'fiveNote',
     detail: 'On the highest notes of this line you fall short of the pitch. Common causes: not enough breath support, or reaching up with the throat and jaw. Try the line on a lip trill or "ng" hum first, keep the jaw loose, and think of the high note as forward and light, not up and loud. If it still strains, transpose down 1–2 semitones and work back up over the weeks.' });
   if (rangeHi != null && r.refHi != null && r.refHi > rangeHi + 50) tips.push({ title: 'This line goes above your comfortable top', level: 'high',
-    detail: 'The reference peaks above the highest comfortable note from your range test. Pushing up there is how voices get strained. Use transpose, or sing those notes an octave lower for now.' });
+    detail: 'The reference peaks above the highest comfortable note from your range check. Pushing up there is how voices get strained. Use transpose, or sing those notes an octave lower for now.' });
   if (r.loBias != null && r.loBias > 30) tips.push({ title: `Low notes drift sharp (${c(r.loBias)})`, level: 'mid',
     detail: 'Low notes need a relaxed, open throat. Let the larynx sit low, sing softer, and don\'t press. Long tones in your lower range help.', drill: 'saHold' });
   if (Math.abs(r.bias) > 20 && !(highFlat && r.bias < 0)) tips.push({ title: `${Math.abs(r.bias) > 40 ? 'Overall' : 'Overall slightly'} ${r.bias < 0 ? 'flat' : 'sharp'} (${c(r.bias)})`, level: 'mid', drill: 'saHold',

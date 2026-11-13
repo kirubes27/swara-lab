@@ -6,7 +6,7 @@ import { saHzFrom, westernName, hzToMidi, midiToHz, kattaiName, kaliSafedName, S
 import { EXERCISES, WARMUP_ROUTINE, exText } from './exercises.js';
 import { ExercisePlayer } from './practice.js';
 import { SongStudio, gpuChecked } from './song.js';
-import { RangeFinder, rangeStatus, voiceType, spanText, agoText, keyboard, RANGE_DUE_DAYS } from './range.js';
+import { RangeFinder, rangeStatus, spanText, agoText, keyboard, rangeText } from './range.js';
 import { FreeSing } from './free.js';
 import { h, toast, ensureMic } from './ui.js';
 import { icon } from './icons.js';
@@ -36,7 +36,7 @@ function renderHeader() {
   tb.classList.toggle('on', tanpura.on);
   $('#micBtn').classList.toggle('on', mic.running);
 }
-// Mic: plausible pitch range from the singer's range test, echo cancellation unless on headphones.
+// Mic: plausible pitch range from the singer's range check, echo cancellation unless on headphones.
 function syncMic() {
   mic.echoCancel = !settings.headphones;
   const lo = settings.rangeLowMidi != null ? midiToHz(settings.rangeLowMidi - 7) : 70;
@@ -117,21 +117,22 @@ function signatureSVG() {
 function tile({ href, ic, title, sub, hero = false, tip }) {
   return h('a', { class: 'tile' + (hero ? ' hero' : ''), href, title: tip }, h('span', { class: 't-ic' }, icon(ic, 20)), h('span', { class: 't-body' }, h('span', { class: 't-title' }, title), h('span', { class: 't-sub' }, sub)), h('span', { class: 't-go' }, icon('chevron', 18)));
 }
-// Today's range card: the saved range on a keyboard, a rough voice type and when it was checked.
+// Today's range card: the saved range on a keyboard, its span, and when it was checked. A month on,
+// it says a new check is due.
 function rangeCard(rs) {
+  const title = h('h2', { class: 'vr-title', id: 'vr-title', tabindex: '-1' }, 'Your range');
   if (!rs.tested) return h('section', { class: 'card vr-card', 'aria-labelledby': 'vr-title' },
-    h('div', { class: 'vr-head' }, h('div', {}, h('h2', { class: 'vr-title', id: 'vr-title' }, 'Your range'), h('div', { class: 'vr-value' }, 'Not checked yet')),
+    h('div', { class: 'vr-head' }, h('div', {}, title, h('div', { class: 'vr-value none' }, 'Not checked yet')),
       h('a', { class: 'btn small', href: '#practice/range' }, 'Find my range')),
-    h('p', { class: 'vr-meta' }, 'Two minutes. Exercises and song keys then fit your voice.'),
+    h('p', { class: 'vr-meta' }, isIndian(settings) ? 'Two minutes, and your Sa and song keys fit your voice.' : 'Two minutes, and exercises and song keys fit your voice.'),
     keyboard(null, null, { mini: true }));
-  const when = rs.days != null ? `checked ${agoText(rs.days)}` : null;
+  const seg = (t) => h('span', { class: 'nw' }, t);
   return h('section', { class: 'card vr-card' + (rs.due ? ' due' : ''), 'aria-labelledby': 'vr-title' },
     h('div', { class: 'vr-head' },
-      h('div', {}, h('h2', { class: 'vr-title', id: 'vr-title' }, 'Your range'), h('div', { class: 'vr-value' }, `${westernName(rs.lo)} – ${westernName(rs.hi)}`)),
+      h('div', {}, title, h('div', { class: 'vr-value' }, rangeText(rs.lo, rs.hi))),
       h('a', { class: 'btn small' + (rs.due ? ' primary' : ''), href: '#practice/range' }, 'Check again')),
-    h('p', { class: 'vr-meta' }, [voiceType(rs.lo, rs.hi), spanText(rs.lo, rs.hi), when].filter(Boolean).join(' · ')),
-    rs.due ? h('p', { class: 'vr-due' }, h('span', { class: 'vr-due-dot', 'aria-hidden': 'true' }),
-      rs.days != null ? `It's been ${agoText(rs.days).replace(/ ago$/, '')}. Voices change with practice, so a quick check keeps your keys right.` : 'Voices change with practice, so a quick check now and then keeps your keys right.') : null,
+    h('p', { class: 'vr-meta' }, seg(spanText(rs.lo, rs.hi)), rs.days != null ? [' · ', seg(`checked ${agoText(rs.days)}`)] : null,
+      rs.due ? [' · ', h('span', { class: 'vr-due nw' }, h('span', { class: 'vr-due-dot', 'aria-hidden': 'true' }), 'due for a new check')] : null),
     keyboard(rs.lo, rs.hi, { mini: true }));
 }
 function renderToday() {
@@ -152,9 +153,12 @@ function renderToday() {
   const rs = rangeStatus();
   const snoozed = !!settings.rangeSnooze && new Date(settings.rangeSnooze) > new Date();
   if (!rs.tested && !snoozed) root.append(h('div', { class: 'callout row wrap spread', style: 'margin-top:16px' },
-    h('div', {}, h('strong', {}, 'Find your range first'), h('p', { class: 'small', style: 'margin:2px 0 0' }, 'Two minutes. It sets a comfortable key for every exercise and lets songs suggest a key that fits you.')),
+    h('div', {}, h('strong', {}, 'Find your range first'), h('p', { class: 'small', style: 'margin:2px 0 0' }, `Two minutes. It sets a comfortable ${isIndian(settings) ? 'Sa' : 'key'} for every exercise and lets songs suggest a key that fits you.`)),
     h('div', { class: 'row' },
-      h('button', { class: 'btn ghost', onclick: () => { saveSettings({ rangeSnooze: new Date(Date.now() + 14 * 864e5).toISOString() }); renderToday(); } }, 'Not now'),
+      h('button', { class: 'btn ghost', onclick: (e) => {
+        saveSettings({ rangeSnooze: new Date(Date.now() + 14 * 864e5).toISOString() }); renderToday();
+        toast('Hidden for two weeks. Your range card is further down Today.'); $('#vr-title')?.focus({ preventScroll: e.detail > 0 }); // keyboard users are taken to the card
+      } }, 'Not now'),
       h('a', { class: 'btn primary', href: '#practice/range' }, 'Find my range'))));
   const steps = [
     { id: 'warm', ic: 'breath', title: 'Warm-up', mins: 8, href: '#practice/warmup', done: doneToday((r) => r.type === 'drill' && WARMUP_ROUTINE.includes(r.id)), what: 'Gets the voice moving before anything demanding.' },
@@ -163,11 +167,10 @@ function renderToday() {
     { id: 'song', ic: 'songs', title: song ? song.title : 'A song', mins: 10, href: '#songs', done: doneToday((r) => r.type === 'song'), what: 'Two or three lines: listen at 0.75×, sing along, then try it muted.' },
   ];
   // a month after the last range check, a new one joins the plan, right after the warm-up (a warm voice reads truer)
-  const gap = rs.prev ? Math.round((new Date(dayKey(new Date()) + 'T12:00') - new Date(rs.prev.d + 'T12:00')) / 864e5) : 0;
-  const rangeDone = rs.tested && rs.days === 0 && gap >= RANGE_DUE_DAYS; // today's check answered a reminder
-  if (rs.tested && (rs.due || rangeDone)) steps.splice(1, 0, { id: 'range', ic: 'keys', title: 'Range check', mins: 2, href: '#practice/range', done: rangeDone,
-    what: rangeDone ? 'Done. Your range and song keys are up to date.' : `${rs.days != null ? `Last checked ${agoText(rs.days)}. ` : ''}Voices change with practice; this keeps song keys and exercises right for you.` });
-  root.append(h('div', { class: 'section' }, h('h2', {}, 'Suggested for today'), h('span', { class: 'small muted' }, 'About 20 minutes · all optional')));
+  if (rs.tested && (rs.due || rs.answeredToday)) steps.splice(1, 0, { id: 'range', ic: 'range', title: 'Range check', mins: 2, href: '#practice/range', done: rs.answeredToday,
+    what: rs.answeredToday ? 'Checked today.' : rs.days != null ? `Last checked ${agoText(rs.days)}.` : 'Voices change with practice; a quick check keeps song keys right.' });
+  const total = steps.reduce((a, s) => a + s.mins, 0);
+  root.append(h('div', { class: 'section' }, h('h2', {}, 'Suggested for today'), h('span', { class: 'small muted' }, `About ${Math.round(total / 5) * 5} minutes · all optional`)));
   root.append(h('div', { class: 'list' }, ...steps.map((s) => h('a', { href: s.href, class: s.done ? 'done' : '' },
     h('span', { class: 'li-ic' }, icon(s.done ? 'check' : s.ic, 18)),
     h('span', { class: 'li-text' }, h('strong', {}, s.title), h('small', {}, s.what)),
@@ -205,7 +208,7 @@ function renderPractice(sub) {
       h('div', { class: 'grid3' },
         tile({ href: '#practice/warmup', ic: 'breath', title: 'Warm-up routine', sub: `${WARMUP_ROUTINE.length} short steps · about 8\u00a0minutes`, hero: true }),
         tile({ href: '#practice/free', ic: 'wave', title: 'Free sing', sub: 'An open pitch monitor. Sing anything.' }),
-        tile({ href: '#practice/range', ic: 'target', title: 'Find your range', sub: settings.rangeLowMidi != null ? `Currently ${westernName(settings.rangeLowMidi)}–${westernName(settings.rangeHighMidi)}` : 'Lowest and highest comfortable notes.' })));
+        tile({ href: '#practice/range', ic: 'range', title: 'Find your range', sub: settings.rangeLowMidi != null ? `Currently ${rangeText(settings.rangeLowMidi, settings.rangeHighMidi)}` : 'Lowest and highest comfortable notes.' })));
     for (const [g, ids] of GROUPS) root.append(h('div', { class: 'section' }, h('h2', {}, g)), h('div', { class: 'drill-grid' }, ...ids.map(drillCard)));
     return;
   }
@@ -402,7 +405,7 @@ function renderSettings(sub) {
     ),
     h('div', { class: 'card form' },
       h('h3', {}, ind ? 'Your tonic (Sa)' : 'Exercise key'),
-      field(ind ? 'Sa' : 'Key note', saSel, ind ? 'Run the range test for a suggestion. Typical: men C#3–E3 (1½–3 kattai), women G#3–C4 (5½ kattai and up).' : 'The note warm-ups and drills are built on. Run the range test for a suggestion.'),
+      field(ind ? 'Sa' : 'Key note', saSel, ind ? 'Do the range check (Practice) for a suggestion. Typical: men C#3–E3 (1½–3 kattai), women G#3–C4 (5½ kattai and up).' : 'The note warm-ups and drills are built on. Do the range check (Practice) for a suggestion.'),
       field('Fine tune', h('span', { class: 'row' }, fine, fineOut), ind ? 'For matching a harmonium or shruti box that\'s slightly off.' : 'For matching an instrument that\'s slightly off A=440.'),
       field('Drone sound', sel('droneSound', [['auto', ind ? 'Automatic (tanpura)' : 'Automatic (soft pad)'], ['pad', 'Soft pad (root + fifth)'], ['tanpura', 'Tanpura']])),
       tanpura.kind() === 'tanpura' ? field('Tanpura tuning', sel('tanpuraFirst', [['P', 'Pa – Sa Sa Sa'], ['M', 'Ma – Sa Sa Sa'], ['N', 'Ni – Sa Sa Sa'], ['S', 'Sa – Sa Sa Sa']]), ind ? 'The first string\'s note. Pa suits most ragas; Ma suits ragas without Pa.' : 'The first string\'s note: Pa is the fifth, Ma the fourth, Ni the seventh, Sa the key note. Pa suits most music.') : null,

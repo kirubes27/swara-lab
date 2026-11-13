@@ -467,38 +467,54 @@ dialog.sheet::backdrop { background: rgba(0, 0, 0, .3); -webkit-backdrop-filter:
 .vr-steps { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; margin-bottom: 18px; }
 .vr-step { display: flex; gap: 12px; align-items: flex-start; padding: 16px; border-radius: var(--r); background: var(--surface2); box-shadow: inset 0 0 0 1.5px transparent; transition: box-shadow .2s, background .2s; }
 .vr-step.live { background: var(--surface); box-shadow: inset 0 0 0 1.5px var(--accent); }
-.vr-n { width: 26px; height: 26px; flex: none; border-radius: 50%; display: grid; place-items: center; background: var(--surface3); color: var(--text2); font: 650 .8rem/1 var(--font); }
+.vr-n { width: 26px; height: 26px; flex: none; border-radius: 50%; display: grid; place-items: center; background: var(--surface3); color: var(--text); font: 650 .8rem/1 var(--font); }
 .vr-step.live .vr-n { background: var(--accent); color: var(--accent-ink); }
-.vr-step.got .vr-n { background: var(--good); color: #fff; }
+.vr-step.got .vr-n { background: var(--good); color: var(--surface); }
 .vr-body { flex: 1; min-width: 0; }
 .vr-t { font-weight: 620; font-size: .92rem; }
 .vr-v { font: 700 1.9rem/1.1 var(--font-display); letter-spacing: -0.025em; font-variant-numeric: tabular-nums; margin: 6px 0 4px; }
 .vr-hint { color: var(--text2); font-size: .86rem; line-height: 1.4; min-height: 2.8em; }
 .vr-body .btn { margin-top: 10px; }
 .vr-step .btn:not(.primary) { background: var(--surface); box-shadow: 0 0 0 1px var(--hair2); }
+.callout .btn.ghost { color: var(--text); } /* accent on the tinted callout falls under 4.5:1 */
 .vr-step .btn:not(.primary):hover { background: var(--surface3); }
-.vr-kb { position: relative; margin-bottom: 16px; }
+.vr-kb { position: relative; margin-bottom: 18px; }
 .vr-dot { position: absolute; top: 62px; width: 14px; height: 14px; margin-left: -7px; border-radius: 50%; background: var(--accent); box-shadow: 0 0 0 3px var(--surface); pointer-events: none; transition: left .08s linear; }
 .vr-dot[hidden] { display: none; }
 .vr-when { margin: 10px 0 0; }
 .vr-wait { margin: 0; }
-.kb { --kb-w: var(--surface2); --kb-b: #3a3a40; --kb-w-on: color-mix(in srgb, var(--good) 30%, var(--surface2)); --kb-b-on: color-mix(in srgb, var(--good) 80%, #000); }
+.kb { position: relative; --kb-w: #ececf0; --kb-b: #3a3a40; --kb-w-on: color-mix(in srgb, var(--good) 52%, #fff); --kb-b-on: color-mix(in srgb, var(--good) 70%, #000); }
 .kb svg { display: block; width: 100%; height: 88px; }
 .kb .kw { fill: var(--kb-w); } .kb .kw.on { fill: var(--kb-w-on); }
+.kb-band { position: relative; height: 3px; margin-top: 3px; } /* the lit range as a bar: 3:1 against the card in both themes */
+.kb-band span { position: absolute; top: 0; bottom: 0; border-radius: 2px; background: var(--good); }
 .kb .kk { fill: var(--kb-b); } .kb .kk.on { fill: var(--kb-b-on); }
-.kb-labels { position: relative; height: 16px; margin-top: 4px; font-size: .7rem; line-height: 16px; color: var(--text3); }
+.kb-labels { position: relative; height: 16px; margin-top: 3px; font-size: .7rem; line-height: 16px; color: var(--text2); }
 .kb-labels span { position: absolute; transform: translateX(-50%); }
+.kb.mini { max-width: 560px; } /* wider, and the keys flatten into tiles */
 .kb.mini svg { height: 26px; }
 .vr-card { margin: 16px 0 0; }
 .vr-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
 .vr-title { margin: 0 0 2px; font: 600 .8rem/1.3 var(--font); color: var(--text2); letter-spacing: 0; }
 .vr-value { font: 700 1.55rem/1.15 var(--font-display); letter-spacing: -0.025em; font-variant-numeric: tabular-nums; }
+.vr-value.none { font: 600 1.05rem/1.3 var(--font); letter-spacing: -0.01em; color: var(--text2); margin-top: 2px; }
+.nw { white-space: nowrap; }
 .vr-meta { margin: 4px 0 14px; color: var(--text2); font-size: .9rem; }
-.vr-due { display: flex; align-items: baseline; gap: 8px; margin: -6px 0 14px; font-size: .9rem; }
-.vr-due-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--accent); flex: none; transform: translateY(-1px); }
-@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) .kb { --kb-w: var(--surface3); --kb-b: #050506; --kb-w-on: color-mix(in srgb, var(--good) 40%, var(--surface3)); --kb-b-on: color-mix(in srgb, var(--good) 72%, #000); } }
-:root[data-theme="dark"] .kb { --kb-w: var(--surface3); --kb-b: #050506; --kb-w-on: color-mix(in srgb, var(--good) 40%, var(--surface3)); --kb-b-on: color-mix(in srgb, var(--good) 72%, #000); }
-@media (max-width: 560px) { .vr-steps { grid-template-columns: minmax(0, 1fr); } .vr-v { font-size: 1.6rem; } .kb svg { height: 72px; } .vr-dot { top: 50px; } }
+.vr-due { color: var(--text); font-weight: 550; }
+.vr-due-dot { display: inline-block; width: 7px; height: 7px; border-radius: 50%; background: var(--accent); margin-right: 6px; vertical-align: 1px; }
+.vr-res-title { margin: 2px 0 10px; font: 600 .8rem/1.3 var(--font); color: var(--text2); letter-spacing: 0; outline-offset: 4px; }
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) .kb { --kb-w: #34343a; --kb-b: #050506; --kb-w-on: color-mix(in srgb, var(--good) 62%, #000); --kb-b-on: var(--good); } }
+:root[data-theme="dark"] .kb { --kb-w: #34343a; --kb-b: #050506; --kb-w-on: color-mix(in srgb, var(--good) 62%, #000); --kb-b-on: var(--good); }
+@media (max-width: 560px) {
+  .vr-steps { grid-template-columns: minmax(0, 1fr); gap: 10px; }
+  .vr-step { padding: 12px 14px; }
+  .vr-v { font-size: 1.45rem; margin: 2px 0; }
+  .vr-hint { min-height: 0; }
+  .vr-body .btn { margin-top: 8px; }
+  .kb svg { height: 64px; } .vr-dot { top: 44px; }
+}
+/* the running step, the keyboard and the result stay clear of the sticky header and the phone tab bar */
+@media (max-width: 900px) { .vr-step, .vr-step .btn, .vr-kb, .range-out { scroll-margin-top: 72px; scroll-margin-bottom: calc(88px + env(safe-area-inset-bottom)); } }
 .sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0; }
 .big-note { font: 700 4.6rem/1 var(--font-display); letter-spacing: -0.045em; font-variant-numeric: tabular-nums; }
 .meter { position: relative; height: 8px; border-radius: 8px; background: var(--surface3); overflow: hidden; max-width: 320px; }
