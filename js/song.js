@@ -216,9 +216,18 @@ function qualitySub(v, tip) {
 }
 let activeSep = null; // the running separation worker (to ask it for the faster model)
 export function useFastModel() { if (activeSep) activeSep.postMessage({ fast: true }); }
+// A worker's address with its content stamp (tools/stamp.py), so it is never an old cached copy.
+function stamped(url) {
+  try {
+    const map = JSON.parse(document.querySelector('script[type=importmap]').textContent).imports;
+    const v = map['./js/' + url.replace(/^\.\//, '')];
+    if (v) return new URL(v, document.baseURI);
+  } catch {}
+  return new URL(url, import.meta.url);
+}
 function runWorker(url, msg, transfer, onProgress) {
   return new Promise((res, rej) => {
-    const w = new Worker(new URL(url, import.meta.url), { type: 'module' });
+    const w = new Worker(stamped(url), { type: 'module' });
     if (url.includes('sep-worker')) activeSep = w;
     w.onmessage = (e) => {
       if (e.data.progress != null) onProgress && onProgress(e.data.progress, e.data.step || e.data.stage, e.data);

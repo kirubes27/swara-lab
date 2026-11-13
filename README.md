@@ -53,6 +53,14 @@ python3 -m http.server 8000
 
 Then open http://localhost:8000.
 
+Before publishing, stamp the scripts so browsers never mix old and new files after an update:
+
+```bash
+python3 tools/stamp.py
+```
+
+It writes a hash of each file in `js/` into the import map in `index.html`.
+
 ## Limits
 
 - Tab-audio capture (for YouTube melody extraction and recording other tabs) works in Chromium browsers on desktop only.
